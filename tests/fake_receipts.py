@@ -5,6 +5,7 @@ import io
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 HOME_DEPOT_LINES = [
+    "",
     "THE HOME DEPOT",
     "123 FAKE STREET",
     "SPRINGFIELD, IL 62701",
@@ -36,7 +37,29 @@ def _font(size: int) -> ImageFont.ImageFont:
     return ImageFont.load_default(size=size)
 
 
-def make_receipt_photo(lines: list[str] = HOME_DEPOT_LINES, *, rotate: float = 0.0, fmt: str = "JPEG") -> bytes:
+SLATE = (45, 52, 60)
+
+
+def _wood(width: int, height: int) -> Image.Image:
+    """A brown background with dark grain lines, like a wooden table."""
+    wood = Image.new("RGB", (width, height), (138, 84, 44))
+    draw = ImageDraw.Draw(wood)
+    for x in range(0, width, 7):
+        shade = 60 + (x * 37) % 50
+        draw.line([(x, 0), (x + 25, height)], fill=(shade + 30, shade, shade // 2), width=2)
+    return wood
+
+
+def make_receipt_photo(
+    lines: list[str] = HOME_DEPOT_LINES,
+    *,
+    rotate: float = 0.0,
+    fmt: str = "JPEG",
+    background: str = "slate",
+    bleed: bool = False,
+) -> bytes:
+    """`background` is "slate" (plain dark) or "wood"; `bleed` lets the receipt run off
+    the top and bottom of the photo, so its four corners aren't visible."""
     font = _font(30)
     line_height = 42
     slip_width = 760
@@ -46,10 +69,13 @@ def make_receipt_photo(lines: list[str] = HOME_DEPOT_LINES, *, rotate: float = 0
         draw.text((40, 40 + i * line_height), line, fill=(30, 30, 30), font=font)
     slip = slip.filter(ImageFilter.GaussianBlur(0.6))  # a little camera softness
 
-    photo = Image.new("RGB", (slip.width + 240, slip.height + 240), (45, 52, 60))
+    size = (slip.width + 240, slip.height + 240)
+    photo = _wood(*size) if background == "wood" else Image.new("RGB", size, SLATE)
     photo.paste(slip, (120, 120))
     if rotate:
-        photo = photo.rotate(rotate, expand=True, fillcolor=(45, 52, 60))
+        photo = photo.rotate(rotate, expand=True, fillcolor=SLATE if background != "wood" else (138, 84, 44))
+    if bleed:
+        photo = photo.crop((0, 140, photo.width, photo.height - 140))
     buffer = io.BytesIO()
     photo.save(buffer, fmt)
     return buffer.getvalue()

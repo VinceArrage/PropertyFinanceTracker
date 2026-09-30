@@ -1,7 +1,10 @@
 """Clean up a phone photo so Tesseract can read it.
 
-Steps: grayscale -> find the receipt's edges and flatten it -> scale so text is a
-readable size -> boost contrast -> (one variant) black-and-white threshold.
+Steps: find the receipt (its four corners, or else the white paper against the
+background) and flatten/crop it -> grayscale -> scale so text is a readable size ->
+boost contrast -> (one variant) black-and-white threshold.
+
+Cropping matters: background texture such as wood grain turns into junk characters.
 """
 
 import cv2
@@ -38,6 +41,36 @@ def find_receipt_corners(gray: np.ndarray) -> np.ndarray | None:
     return None
 
 
+def find_paper_corners(image: Image.Image) -> np.ndarray | None:
+    """Find the receipt as the largest white, colourless area (e.g. on a wooden table).
+
+    Used when the receipt's four corners aren't all in the photo. Returns the corners
+    of the rotated rectangle around the paper, or None if the paper can't be told
+    apart from the background (e.g. a white table).
+    """
+    rgb = np.array(image)
+    height, width = rgb.shape[:2]
+    scale = min(1.0, DETECT_EDGE / max(height, width))
+    if scale < 1:
+        rgb = cv2.resize(rgb, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
+    paper = ((hsv[..., 1] < 60) & (hsv[..., 2] > 140)).astype(np.uint8) * 255
+    kernel = np.ones((15, 15), np.uint8)
+    paper = cv2.morphologyEx(paper, cv2.MORPH_CLOSE, kernel)  # fill printed text and logos
+    paper = cv2.morphologyEx(paper, cv2.MORPH_OPEN, kernel)  # drop small bright specks
+    contours, _ = cv2.findContours(paper, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+    largest = max(contours, key=cv2.contourArea)
+    share = cv2.contourArea(largest) / (paper.shape[0] * paper.shape[1])
+    if not 0.15 <= share <= 0.9:  # too small to be the receipt, or it's the whole photo
+        return None
+    corners = cv2.boxPoints(cv2.minAreaRect(largest)) / scale
+    corners[:, 0] = corners[:, 0].clip(0, width - 1)
+    corners[:, 1] = corners[:, 1].clip(0, height - 1)
+    return _order_corners(corners.astype("float32"))
+
+
 def flatten(gray: np.ndarray, corners: np.ndarray) -> np.ndarray:
     top_left, top_right, bottom_right, bottom_left = corners
     width = int(max(np.linalg.norm(top_right - top_left), np.linalg.norm(bottom_right - bottom_left)))
@@ -51,6 +84,8 @@ def prepare_variants(image: Image.Image) -> list[np.ndarray]:
     """Return cleaned-up versions of the photo to try OCR on (best one wins)."""
     gray = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2GRAY)
     corners = find_receipt_corners(gray)
+    if corners is None:
+        corners = find_paper_corners(image)
     if corners is not None:
         gray = flatten(gray, corners)
 

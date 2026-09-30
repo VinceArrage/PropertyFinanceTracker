@@ -7,3 +7,4 @@ __pycache__/
 *.db-shm
 # Real receipt photos used for tuning the reader: never commit these.
 sample-receipts/
+tests/images/

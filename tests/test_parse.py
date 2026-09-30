@@ -35,6 +35,60 @@ def test_hardware_receipt():
     assert result.confidence == "high"
 
 
+# Home Depot layout as OCR sees it on a photo taken on a wooden table: the logo is an
+# image (only the slogan is text), descriptions sit on their own lines, and the grain
+# at the edge adds junk characters before and after the text.
+HOME_DEPOT_ON_WOOD = """
+HH OK ~~ | More saving. 4 AS
+: NS< @] More doing: What
+iN 150 MARKET DRIVE SPRINGFIELD OH 44000 Wey
+; 440 555-0100 wea
+Hy 3827 00041 01119 09/10/19 03:37 PM LAWN
+1p CASHIER PAT \\ Ay
+Vg 098168701990 2X8-8 PT 2P <A> wed
+2X8-8FT #2PRIME PT GC fo
+2@7.57 15.14
+Lf 885196000214 6068 RD PD <A> 578.00 AH
+i 6068 RH GLID PATIO DR/SMOOTH INT aas
+{) 697105723370 SCREEN DR <A> 148.00 ANAL
+yt SCREEN FOR 200 PS510 - DOOR WHITE w|
+( SUBTOTAL 741.14 AWG
+i SALES TAX 50.03 aA
+vy | TOTAL $791.17 mUile
+Th XXXXXXXX0000 GIFT CARD 791.17 atte
+if CARD BALANCE 0.00 ms me
+"""
+
+
+def test_home_depot_layout_with_edge_junk():
+    result = parse_receipt_text(HOME_DEPOT_ON_WOOD, today=TODAY)
+    assert result.vendor == "Home Depot"
+    assert result.date == "2019-09-10"
+    assert (result.subtotal_cents, result.tax_cents, result.total_cents) == (74114, 5003, 79117)
+    assert [(item.description, item.total_cents) for item in result.items] == [
+        ("2X8-8FT #2PRIME PT GC", 1514),
+        ("6068 RD PD – 6068 RH GLID PATIO DR/SMOOTH INT", 57800),
+        ("SCREEN DR – SCREEN FOR 200 PS510 - DOOR WHITE", 14800),
+    ]
+    assert result.items[0].quantity == 2
+    assert result.items[0].unit_price_cents == 757
+    assert result.warnings == []
+    assert result.confidence == "high"
+
+
+def test_unreadable_tax_is_worked_out_but_not_trusted():
+    text = "HOME DEPOT\n09/10/2026\nITEM 10.00\nSUBTOTAL 10.00\nSALES TAX 5OO8s\nTOTAL 10.80\n"
+    result = parse_receipt_text(text, today=TODAY)
+    assert result.tax_cents == 80
+    assert any("worked out as total − subtotal" in w for w in result.warnings)
+    assert result.confidence == "medium"
+
+
+def test_address_is_not_the_store_name():
+    text = "ty 150 MARKET DRIVE ELYRIA OH 44035\n09/10/2026\nTOTAL 5.00\n"
+    assert parse_receipt_text(text, today=TODAY).vendor is None
+
+
 def test_unknown_store_uses_first_name_like_line():
     text = "JOE'S PLUMBING SUPPLY\n42 Main St\nSep 3, 2026\nPIPE WRENCH 24.00\nTOTAL 24.00\n"
     result = parse_receipt_text(text, today=TODAY)
@@ -112,6 +166,9 @@ def test_no_improvement_hint_for_small_hardware():
         ("PAINT 12.99 T", (1299, "PAINT")),
         ("COUPON 5.00-", (-500, "COUPON")),
         ("TOTAL 84 . 12", (8412, "TOTAL")),
+        ("SUBTOTAL 741.14 AWG", (74114, "SUBTOTAL")),  # junk after the price from the photo's edge
+        ("ITEM 5.00 PS510", None),  # a number after the price means it isn't a price column
+        ("2@7.57 15.14", (1514, "2@7.57")),
         ("SKU 1234567894.98", None),  # digits run together: not a believable price
         ("NO PRICE HERE", None),
     ],

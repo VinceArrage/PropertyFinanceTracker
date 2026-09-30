@@ -9,11 +9,14 @@ from dataclasses import asdict, dataclass, field
 from datetime import date, timedelta
 from difflib import get_close_matches
 
-# A price at the end of a line: "4.98", "$1,234.56", "5.00-", "-2.00", "12.99 T", "84 . 12".
+# A price: "4.98", "$1,234.56", "-2.00", "5.00-", "84 . 12". Not part of a longer number.
 _AMOUNT = re.compile(
-    r"(?:(?<=\s)|(?<=\$)|^)(?P<neg>-)?\$?\s?(?P<dollars>\d{1,3}(?:,\d{3})+|\d{1,5})\s?[.,]\s?(?P<cents>\d{2})"
-    r"(?P<trail>-)?(?:\s*[A-Za-z*]{1,2})?\s*$"
+    r"(?<![\w.,])(?P<neg>-)?\$?\s?(?P<dollars>\d{1,3}(?:,\d{3})+|\d{1,5})\s?[.,]\s?(?P<cents>\d{2})(?![\d])"
+    r"(?P<trail>-)?"
 )
+# What may follow the price at the end of a line: tax flags ("T", "N", "TA") or a few
+# junk characters that OCR produced from the photo's edge, but never another number.
+_MAX_TRAILING = 12
 _QTY = re.compile(r"(?P<qty>\d+(?:\.\d+)?)\s*(?:@|[xX]\s)\s*\$?(?P<price>\d+[.,]\d{2})")
 
 _TOTAL = re.compile(r"\b(grand\s*total|total\s*due|amount\s*due|balance\s*due|total)\b", re.I)
@@ -43,13 +46,15 @@ _DATE_PATTERNS = [
 
 _NOT_VENDOR = re.compile(
     r"welcome|thank|receipt|store\s*#|store\s*no|www\.|\.com|tel\b|phone|cashier|register|trans(action)?\b"
-    r"|^\d|\d{3}[-.\s)]\d{3}[-.\s]\d{4}",
+    r"|^\d|\d{3}[-.\s)]\d{3}[-.\s]\d{4}"
+    r"|\b\d{5}(-\d{4})?\s*$"  # ends with a ZIP code
+    r"|\b\d+\s+(\w+\s+)*(st|street|ave|avenue|rd|road|dr|drive|blvd|ln|lane|way|hwy|pkwy|ct|pl)\b",  # street address
     re.I,
 )
 
 # Well-known stores, matched anywhere in the text (the name is often in a logo up top).
 KNOWN_STORES = {
-    r"home\s*depot": "Home Depot",
+    r"home\s*depot|more\s*saving\.?\s*more\s*doing|more\s*saving|more\s*doing": "Home Depot",  # logo is an image; slogan is text
     r"lowe'?s": "Lowe's",
     r"menards": "Menards",
     r"ace\s*hardware": "Ace Hardware",
@@ -110,9 +115,18 @@ class ParsedReceipt:
 
 
 def parse_amount(line: str) -> tuple[int, str] | None:
-    """Return (cents, text before the amount) when a line ends with a price."""
-    match = _AMOUNT.search(line)
-    if not match:
+    """Return (cents, text before the amount) when a line ends with a price.
+
+    The price is the last one on the line; up to a few non-numeric characters may
+    follow it (tax flags, or OCR noise from the photo's edge).
+    """
+    match = None
+    for candidate in _AMOUNT.finditer(line):
+        match = candidate
+    if match is None:
+        return None
+    trailing = line[match.end():].strip()
+    if len(trailing) > _MAX_TRAILING or re.search(r"\d", trailing):
         return None
     cents = int(match["dollars"].replace(",", "")) * 100 + int(match["cents"])
     if match["neg"] or match["trail"]:
@@ -179,9 +193,14 @@ def find_vendor(lines: list[str], known_vendors: list[str] = ()) -> tuple[str | 
                 return by_lower[match[0]], True
 
     for line in head:
-        letters = sum(ch.isalpha() for ch in line)
-        if letters >= 3 and letters / max(len(line.replace(" ", "")), 1) >= 0.6 and not _NOT_VENDOR.search(line):
-            return " ".join(word.capitalize() if word.isupper() else word for word in line.split()), False
+        candidate = clean_description(line)
+        letters = sum(ch.isalpha() for ch in candidate)
+        if (
+            letters >= 3
+            and letters / max(len(candidate.replace(" ", "")), 1) >= 0.6
+            and not _NOT_VENDOR.search(candidate)
+        ):
+            return " ".join(word.capitalize() if word.isupper() else word for word in candidate.split()), False
     return None, False
 
 
@@ -189,36 +208,96 @@ def _is_summary_line(line: str) -> bool:
     return bool(_TOTAL.search(line) or _SUBTOTAL.search(line) or (_TAX.search(line) and not _NOT_TAX.search(line)))
 
 
+def _is_junk_word(word: str) -> bool:
+    """Short bits OCR invents from the photo's border ("ty", "4)", "i}", "|"), found at line edges."""
+    if len(word) == 1:
+        return True
+    return len(word) <= 3 and (
+        any(ch.islower() for ch in word) or not any(ch.isalnum() for ch in word) or any(ch in ")}]|(" for ch in word)
+    )
+
+
+def clean_description(text: str) -> str:
+    text = re.sub(r"<[A-Z0-9]{1,2}>?", " ", text)  # return/tax codes like <A>
+    text = re.sub(r"\b\d{5,}\b", " ", text)  # SKU / UPC numbers
+    text = re.sub(r"[«»|{}\[\]~“”‘’\"]", " ", text)  # OCR noise
+    words = text.split()
+    while words and _is_junk_word(words[0]):
+        words.pop(0)
+    while words and _is_junk_word(words[-1]):
+        words.pop()
+    return " ".join(words).strip(" -*#:.,;")
+
+
+def _has_words(text: str) -> bool:
+    return sum(ch.isalpha() for ch in text) >= 2
+
+
+def _is_description_line(line: str) -> bool:
+    """An unpriced line that reads like product text (not a date, phone or cashier line)."""
+    if re.search(
+        r"\d{1,2}/\d{1,2}/\d{2,4}|\d{3}[-.\s)]\d{3}[-.\s]\d{4}|cashier|register|store|\bitems?\b|thank|welcome"
+        r"|member|savings",
+        line,
+        re.I,
+    ):
+        return False
+    return sum(ch.isalpha() for ch in clean_description(line)) >= 3
+
+
 def find_items(lines: list[str]) -> list[LineItem]:
-    """Priced lines above the subtotal/total that look like products."""
+    """Products above the subtotal/total.
+
+    Handles the common layouts: "DESCRIPTION  PRICE" on one line; a quantity line
+    ("2 @ 4.98   9.96") under or instead of the price; a description on its own line
+    with the price on the next; and an extra description line under an item.
+    """
     end = next((i for i, line in enumerate(lines) if _is_summary_line(line)), len(lines))
     items: list[LineItem] = []
+    pending: list[str] = []  # unpriced description lines since the last item
+
+    def attach_pending_to_last_item() -> None:
+        if items and pending:
+            extra = clean_description(pending[0])
+            if extra and extra.lower() not in items[-1].description.lower():
+                items[-1].description = f"{items[-1].description} – {extra}" if items[-1].description else extra
+
     for line in lines[:end]:
-        qty_match = _QTY.search(line)
         found = parse_amount(line)
-        if qty_match and (not found or not re.search(r"[A-Za-z]{2,}", _QTY.sub("", found[1]))):
-            # A "2 @ 4.98" line on its own belongs to the item above it.
-            if items:
-                items[-1].quantity = float(qty_match["qty"])
-                items[-1].unit_price_cents = parse_amount(qty_match["price"])[0]
-            continue
         if not found:
+            if _is_description_line(line):
+                pending.append(line)
             continue
-        cents, description = found
-        description = re.sub(r"\b\d{5,}\b", "", description)  # SKU / UPC numbers
-        if qty_match:
-            description = _QTY.sub("", description)
-        description = " ".join(description.split()).strip(" -*#:")
-        if sum(ch.isalpha() for ch in description) < 2 or _PAYMENT.search(description):
+
+        cents, before = found
+        qty_match = _QTY.search(line)
+        description = clean_description(_QTY.sub(" ", before) if qty_match else before)
+        quantity = float(qty_match["qty"]) if qty_match else None
+        unit_price = parse_amount(qty_match["price"])[0] if qty_match else None
+
+        if not _has_words(description):
+            if pending:
+                # Price line for the description line(s) just above it.
+                description = clean_description(pending[-1])
+            elif qty_match and items:
+                # A "2 @ 4.98" line on its own belongs to the item above it.
+                items[-1].quantity, items[-1].unit_price_cents = quantity, unit_price
+                continue
+            else:
+                continue
+            pending = []
+        else:
+            attach_pending_to_last_item()
+            pending = []
+
+        if _PAYMENT.search(description):
             continue
         # "INSTANT SAVINGS 10.00-" is a discount on an item; "YOU SAVED 10.00" is just a summary.
         if _NOT_ITEM.search(description) and cents >= 0:
             continue
-        item = LineItem(description=description, total_cents=cents)
-        if qty_match:
-            item.quantity = float(qty_match["qty"])
-            item.unit_price_cents = parse_amount(qty_match["price"])[0]
-        items.append(item)
+        items.append(LineItem(description, cents, quantity, unit_price))
+
+    attach_pending_to_last_item()
     return items
 
 
@@ -232,7 +311,7 @@ def parse_receipt_text(text: str, known_vendors: list[str] = (), today: date | N
     lines = [line for line in lines if line]
     result = ParsedReceipt()
 
-    result.vendor, vendor_confident = find_vendor(lines, known_vendors)
+    result.vendor, _ = find_vendor(lines, known_vendors)
     result.date = find_date(text, today)
 
     total_candidates, subtotals, taxes, tax_totals = [], [], [], []
@@ -259,6 +338,7 @@ def parse_receipt_text(text: str, known_vendors: list[str] = (), today: date | N
     elif taxes:
         result.tax_cents = sum(taxes)
     total_from_label = bool(total_candidates)
+    tax_inferred = False
     if total_candidates:
         result.total_cents = max(total_candidates)
     elif result.subtotal_cents is not None and result.tax_cents is not None:
@@ -270,6 +350,16 @@ def parse_receipt_text(text: str, known_vendors: list[str] = (), today: date | N
             result.total_cents = max(amounts)
             result.warnings.append("No TOTAL line found; guessed the largest amount on the receipt.")
 
+    if (
+        result.tax_cents is None
+        and result.subtotal_cents is not None
+        and result.total_cents is not None
+        and result.total_cents > result.subtotal_cents
+    ):
+        result.tax_cents = result.total_cents - result.subtotal_cents
+        tax_inferred = True
+        result.warnings.append("The tax line couldn't be read; it was worked out as total − subtotal.")
+
     result.items = find_items(lines)
 
     totals_check = None
@@ -280,16 +370,19 @@ def parse_receipt_text(text: str, known_vendors: list[str] = (), today: date | N
                 f"Subtotal {_money(result.subtotal_cents)} + tax {_money(result.tax_cents)} "
                 f"doesn't equal the total {_money(result.total_cents)}. One of them may be misread."
             )
+    items_check = None
     if result.items:
         items_sum = sum(item.total_cents for item in result.items)
         target = result.subtotal_cents
         if target is None and result.total_cents is not None:
             target = result.total_cents - (result.tax_cents or 0)
-        if target is not None and items_sum != target:
-            result.warnings.append(
-                f"The items add up to {_money(items_sum)} but should total {_money(target)}. "
-                "Some items may be missing or misread."
-            )
+        if target is not None:
+            items_check = items_sum == target
+            if not items_check:
+                result.warnings.append(
+                    f"The items add up to {_money(items_sum)} but should total {_money(target)}. "
+                    "Some items may be missing or misread."
+                )
 
     if result.vendor is None:
         result.warnings.append("Couldn't find the store name.")
@@ -298,8 +391,20 @@ def parse_receipt_text(text: str, known_vendors: list[str] = (), today: date | N
     if result.total_cents is None:
         result.warnings.append("Couldn't find the total.")
 
-    if result.total_cents and result.date and result.vendor and total_from_label and totals_check is not False:
-        result.confidence = "high" if vendor_confident or totals_check else "medium"
+    # "High" means the numbers were cross-checked against each other, not just found:
+    # subtotal + tax = total (with a tax that was actually read), or the items add up.
+    checks_failed = totals_check is False or items_check is False
+    verified = bool((totals_check and not tax_inferred) or items_check)
+    if (
+        result.total_cents
+        and result.date
+        and result.vendor
+        and total_from_label
+        and verified
+        and not checks_failed
+        and not tax_inferred
+    ):
+        result.confidence = "high"
     elif result.total_cents and (result.date or result.vendor):
         result.confidence = "medium"
 
