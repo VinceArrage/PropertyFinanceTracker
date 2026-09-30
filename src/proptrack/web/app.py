@@ -12,7 +12,7 @@ from starlette.exceptions import HTTPException
 
 from proptrack.categories import list_categories
 from proptrack.config import Config, load_config
-from proptrack.db import connect, init_db
+from proptrack.db import SCHEMA_VERSION, connect, init_db
 from proptrack.money import format_cents, parse_money
 from proptrack.properties import (
     MAX_UNITS,
@@ -262,6 +262,14 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def get_conn():
         conn = connect(config.db_path)
         try:
+            # If the database was upgraded by a newer copy of the app while this one kept
+            # running, saving would fail on changed tables. Say so instead of crashing.
+            if conn.execute("PRAGMA user_version").fetchone()[0] > SCHEMA_VERSION:
+                raise HTTPException(
+                    status_code=503,
+                    detail="The app was updated while this window was open. Close the black "
+                    "Property Tracker window and double-click start.bat again.",
+                )
             yield conn
         finally:
             conn.close()
@@ -277,7 +285,16 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.exception_handler(HTTPException)
     async def http_error(request: Request, exc: HTTPException):
-        return render(request, "error.html", status_code=exc.status_code, message=exc.detail)
+        return render(request, "error.html", status_code=exc.status_code, status=exc.status_code, message=exc.detail)
+
+    # The server still prints the full error details in its window after this page is sent.
+    @app.exception_handler(Exception)
+    async def unexpected_error(request: Request, exc: Exception):
+        return render(
+            request, "error.html", status_code=500, status=500,
+            message="Something went wrong and nothing was saved. The details are in the black Property "
+            "Tracker window; copy them to Claude to get it fixed.",
+        )
 
     @app.get("/")
     async def home():

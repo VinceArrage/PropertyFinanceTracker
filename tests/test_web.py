@@ -177,6 +177,31 @@ def test_categories_page(client):
     assert "Depreciated" in response.text
 
 
+def test_database_newer_than_app_asks_for_restart(client, tmp_path):
+    import sqlite3
+
+    db = sqlite3.connect(tmp_path / "data" / "tracker.db")
+    db.execute("PRAGMA user_version = 999")
+    db.commit()
+    response = client.get("/properties")
+    assert response.status_code == 503
+    assert "double-click start.bat again" in response.text
+
+
+def test_unexpected_error_shows_friendly_page(tmp_path):
+    app = create_app(Config(data_dir=tmp_path / "data", tesseract_cmd=Path("missing.exe")))
+
+    @app.get("/boom")
+    async def boom():
+        raise RuntimeError("kaboom")
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/boom")
+    assert response.status_code == 500
+    assert "Something went wrong and nothing was saved" in response.text
+    assert "kaboom" not in response.text
+
+
 def test_text_is_escaped(client):
     response = add(client, name="<script>alert(1)</script>")
     assert "<script>alert(1)</script>" not in response.text
