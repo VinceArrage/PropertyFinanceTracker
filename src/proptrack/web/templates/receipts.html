@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Receipts · Property Tracker{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Receipts</h1>
+  {% if has_properties %}<a class="button primary" href="/receipts/new">+ Scan receipt</a>{% endif %}
+</div>
+
+{% if saved %}
+  <p class="alert success" role="status">Expense saved. <a href="/receipts/new">Scan another</a></p>
+{% endif %}
+{% if deleted %}<p class="alert success" role="status">Receipt deleted.</p>{% endif %}
+
+{% if not has_properties %}
+  <div class="empty">
+    <p>Add a property first, then you can scan receipts for it.</p>
+    <a class="button primary" href="/properties/new">Add property</a>
+  </div>
+{% elif not receipts %}
+  <div class="empty">
+    <p>No receipts yet.</p>
+    <a class="button primary" href="/receipts/new">Scan your first receipt</a>
+  </div>
+{% else %}
+  <ul class="receipt-list">
+    {% for r in receipts %}
+    <li>
+      <a class="receipt-row" href="/receipts/{{ r.id }}">
+        <img src="/receipts/{{ r.id }}/image" alt="" loading="lazy">
+        <div class="receipt-info">
+          <strong>{{ r.parsed.vendor or "Unknown store" }}</strong>
+          <span class="muted">{{ r.parsed.date or "No date" }} · {{ r.property_name or "No property" }}</span>
+        </div>
+        <div class="receipt-side">
+          <span class="amount">{{ r.parsed.total_cents|money if r.parsed.total_cents is not none else "—" }}</span>
+          {% if r.status == "pending" %}<span class="badge pending">Needs review</span>
+          {% else %}<span class="badge done">Saved</span>{% endif %}
+        </div>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+{% endif %}
+{% endblock %}

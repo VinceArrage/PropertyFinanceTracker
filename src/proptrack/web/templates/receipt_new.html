@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Scan receipt · Property Tracker{% endblock %}
+{% block content %}
+<h1>Scan a receipt</h1>
+
+{% if error %}<p class="alert error" role="alert">{{ error }}</p>{% endif %}
+
+{% if not properties %}
+  <div class="empty">
+    <p>Add a property first.</p>
+    <a class="button primary" href="/properties/new">Add property</a>
+  </div>
+{% else %}
+<form method="post" enctype="multipart/form-data" class="form" id="scan-form">
+  <label>Property
+    <select name="property_id" required>
+      <option value="" {% if not property_id %}selected{% endif %} disabled>Choose a property…</option>
+      {% for p in properties %}
+      <option value="{{ p.id }}" {% if p.id == property_id %}selected{% endif %}>{{ p.name }} ({{ p.kind }})</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <label class="photo-picker">
+    <input type="file" name="photo" accept="image/*" required id="photo">
+    <span class="photo-picker-box">
+      <strong>Take or choose a photo</strong>
+      <span class="muted">Lay the receipt flat on a dark surface, fill the frame, and avoid shadows.</span>
+    </span>
+  </label>
+
+  <div class="actions">
+    <button class="button primary" type="submit">Read receipt</button>
+    <a class="button" href="/receipts">Cancel</a>
+  </div>
+</form>
+
+<div class="busy" id="busy" hidden>
+  <div class="busy-box" role="status">
+    <div class="spinner" aria-hidden="true"></div>
+    <p>Reading your receipt… this takes a few seconds.</p>
+  </div>
+</div>
+
+<script>
+  const form = document.getElementById("scan-form");
+  const photo = document.getElementById("photo");
+  form.addEventListener("submit", () => { document.getElementById("busy").hidden = false; });
+  // On a phone, go straight to reading once a photo is picked.
+  photo.addEventListener("change", () => {
+    if (photo.files.length && form.reportValidity()) form.requestSubmit();
+  });
+</script>
+{% endif %}
+{% endblock %}

@@ -3,8 +3,10 @@
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
+# Version 1: the original schema below. Later versions are applied in order from
+# MIGRATIONS so existing databases are upgraded in place.
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS properties (
     id                  INTEGER PRIMARY KEY,
@@ -77,6 +79,11 @@ CREATE TABLE IF NOT EXISTS rent_payments (
 CREATE INDEX IF NOT EXISTS idx_rent_property_date ON rent_payments(property_id, date);
 """
 
+MIGRATIONS = {
+    # What the reader extracted (store, date, totals, items, warnings) as JSON, for the review screen.
+    2: "ALTER TABLE receipts ADD COLUMN parsed_json TEXT;",
+}
+
 # (name, Schedule E line). Capital improvements are depreciated over years
 # rather than deducted, so they have no single line of their own.
 RENTAL_CATEGORIES = [
@@ -120,18 +127,25 @@ def connect(db_path: Path) -> sqlite3.Connection:
 
 
 def init_db(conn: sqlite3.Connection) -> None:
-    """Create tables and seed categories. Safe to call on every start."""
-    if conn.execute("PRAGMA user_version").fetchone()[0] >= SCHEMA_VERSION:
+    """Create tables, seed categories and apply migrations. Safe to call on every start."""
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if version >= SCHEMA_VERSION:
         return
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.executescript(SCHEMA)
-    with conn:
-        conn.executemany(
-            "INSERT OR IGNORE INTO categories (name, applies_to, schedule_e_line) VALUES (?, 'rental', ?)",
-            RENTAL_CATEGORIES,
-        )
-        conn.executemany(
-            "INSERT OR IGNORE INTO categories (name, applies_to) VALUES (?, 'personal')",
-            [(name,) for name in PERSONAL_CATEGORIES],
-        )
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    if version < 1:
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.executescript(SCHEMA)
+        with conn:
+            conn.executemany(
+                "INSERT OR IGNORE INTO categories (name, applies_to, schedule_e_line) VALUES (?, 'rental', ?)",
+                RENTAL_CATEGORIES,
+            )
+            conn.executemany(
+                "INSERT OR IGNORE INTO categories (name, applies_to) VALUES (?, 'personal')",
+                [(name,) for name in PERSONAL_CATEGORIES],
+            )
+            conn.execute("PRAGMA user_version = 1")
+        version = 1
+    for target in range(version + 1, SCHEMA_VERSION + 1):
+        conn.executescript(MIGRATIONS[target])
+        conn.execute(f"PRAGMA user_version = {target}")
+        conn.commit()

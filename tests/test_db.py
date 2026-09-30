@@ -3,7 +3,7 @@ import sqlite3
 import pytest
 
 from proptrack.categories import list_categories
-from proptrack.db import PERSONAL_CATEGORIES, RENTAL_CATEGORIES, SCHEMA_VERSION, init_db
+from proptrack.db import PERSONAL_CATEGORIES, RENTAL_CATEGORIES, SCHEMA, SCHEMA_VERSION, connect, init_db
 
 
 def test_tables_created(conn):
@@ -12,11 +12,20 @@ def test_tables_created(conn):
 
 
 def test_categories_seeded_once(conn):
-    conn.execute("PRAGMA user_version = 0")
     init_db(conn)  # re-running must not duplicate categories
     assert len(list_categories(conn, is_rental=True)) == len(RENTAL_CATEGORIES)
     assert len(list_categories(conn, is_rental=False)) == len(PERSONAL_CATEGORIES)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+
+
+def test_version_1_database_is_upgraded(tmp_path):
+    old = connect(tmp_path / "old.db")
+    old.executescript(SCHEMA)
+    old.execute("PRAGMA user_version = 1")
+    init_db(old)
+    columns = {row["name"] for row in old.execute("PRAGMA table_info(receipts)")}
+    assert "parsed_json" in columns
+    assert old.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
 
 
 def test_rental_categories_have_schedule_e_lines(conn):

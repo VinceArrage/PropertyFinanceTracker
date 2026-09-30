@@ -1,34 +1,43 @@
 # Property Finance Tracker (`proptrack`)
 
 Tracks expenses, receipts and rent for rental properties and a personal home.
-Everything runs locally; nothing is sent to any online service.
+Everything runs locally on this PC; nothing is sent to any online service.
+
+## Start the app
+Double-click **`start.bat`**. It starts the app and opens http://localhost:8000 in your
+browser. Keep the black window open while you use the app; close it to stop.
+
+What you can do there:
+- **Properties:** add, edit, delete, and switch between rental and personal.
+- **Receipts:** take or choose a photo, let the app read store/date/total/items,
+  check the result next to the photo, and save it as an expense.
+- **Categories:** the expense categories (IRS Schedule E lines for rentals).
+
+## How receipt reading works
+Photos are read on this PC with Tesseract (free, offline). The app flattens and cleans
+the photo, reads the text, then uses rules to find the store, date, subtotal, tax, total
+and line items. It checks that subtotal + tax = total and that the items add up, and
+tells you when something doesn't match. You always confirm before anything is saved.
+Tips: lay the receipt flat on a dark surface, fill the frame, avoid shadows and glare.
+
+It learns as you go: stores you've saved are recognized on later receipts, and the
+category you pick for a store is suggested next time.
 
 ## Where things live
-- **Code:** this folder (synced by OneDrive).
-- **Data:** `C:\Users\vince\PropertyFinanceData` (database + receipt photos), kept
-  outside OneDrive so syncing can't corrupt a database mid-write. Set in `config.toml`.
+- **Code:** this folder (synced by OneDrive, pushed to GitHub).
+- **Data:** `C:\Users\vince\PropertyFinanceData` (database + receipt photos), kept outside
+  OneDrive so syncing can't corrupt a database mid-write. Set in `config.toml`.
 
-## Setup (already done on this PC)
+## Command line
 ```powershell
-py -3.12 -m venv .venv            # or the full path to python.exe
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-.\.venv\Scripts\proptrack.exe init
-```
-
-## Usage
-```powershell
-.\.venv\Scripts\proptrack.exe property add            # asks step by step, incl. "Is this a rental?"
+.\.venv\Scripts\proptrack.exe --help
+.\.venv\Scripts\proptrack.exe serve --open          # same as start.bat
 .\.venv\Scripts\proptrack.exe property list
-.\.venv\Scripts\proptrack.exe property show "Elm St"
-.\.venv\Scripts\proptrack.exe property edit "Elm St" --rent 1850
-.\.venv\Scripts\proptrack.exe property edit "Elm St" --personal   # switch type
-.\.venv\Scripts\proptrack.exe categories --property "Elm St"
 ```
-Rentals track rent, tenant and lease, and use IRS Schedule E expense categories.
-Personal homes use home categories (maintenance, HOA, improvements, ...).
 
-## Tests
+## Development
 ```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 .\.venv\Scripts\python.exe -m pytest
 ```
-Tests use temporary databases and never touch the real data folder.
+Tests use temporary databases and generated receipt images; they never touch real data.

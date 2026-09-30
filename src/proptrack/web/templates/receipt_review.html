@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block title %}Review receipt · Property Tracker{% endblock %}
+{% block content %}
+<p><a class="back" href="/receipts">&larr; All receipts</a></p>
+<div class="page-head">
+  <h1>{{ "Edit expense" if receipt.status == "reviewed" else "Check and save" }}</h1>
+  <span class="badge confidence-{{ receipt.parsed.confidence }}">
+    {{ {"high": "Read well", "medium": "Check carefully", "low": "Hard to read"}[receipt.parsed.confidence] }}
+  </span>
+</div>
+
+{% if error %}<p class="alert error" role="alert">{{ error }}</p>{% endif %}
+{% if receipt.parsed.warnings and receipt.status == "pending" %}
+  <div class="alert warning">
+    <strong>Double-check</strong>
+    <ul>{% for w in receipt.parsed.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+  </div>
+{% endif %}
+
+<div class="review">
+  <figure class="review-photo">
+    <a href="/receipts/{{ receipt.id }}/image" target="_blank" rel="noopener">
+      <img src="/receipts/{{ receipt.id }}/image" alt="Receipt photo">
+    </a>
+    <figcaption class="muted">Tap to open full size</figcaption>
+  </figure>
+
+  <form method="post" class="form" id="review-form">
+    <label>Property
+      <select name="property_id" id="property" required>
+        <option value="" disabled {% if not values.property_id %}selected{% endif %}>Choose…</option>
+        {% for p in properties %}
+        <option value="{{ p.id }}" data-kind="{{ p.kind }}" {% if p.id == values.property_id %}selected{% endif %}>{{ p.name }} ({{ p.kind }})</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label>Store
+      <input name="vendor" value="{{ values.vendor }}" placeholder="e.g. Home Depot">
+    </label>
+
+    <div class="row">
+      <label>Date <input type="date" name="date" required value="{{ values.date }}"></label>
+      <label>Total <input name="total" inputmode="decimal" required value="{{ values.total }}" placeholder="0.00"></label>
+    </div>
+    <div class="row">
+      <label>Tax <input name="tax" inputmode="decimal" value="{{ values.tax }}" placeholder="0.00"></label>
+      <label>Category
+        <select name="category_id" id="category">
+          <option value="">Uncategorized</option>
+          <optgroup label="Rental categories" data-kind="rental">
+            {% for c in rental_categories %}
+            <option value="{{ c.id }}" {% if c.id == values.category_id %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+          </optgroup>
+          <optgroup label="Personal home categories" data-kind="personal">
+            {% for c in personal_categories %}
+            <option value="{{ c.id }}" {% if c.id == values.category_id %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+          </optgroup>
+        </select>
+      </label>
+    </div>
+
+    <label class="check">
+      <input type="checkbox" name="is_capital_improvement" {% if values.is_capital_improvement %}checked{% endif %}>
+      <span>Capital improvement <span class="muted">(adds value or extends life, e.g. new roof or water heater)</span></span>
+    </label>
+    {% if receipt.parsed.improvement_hint and receipt.status == "pending" %}
+      <p class="hint">This receipt mentions “{{ receipt.parsed.improvement_hint }}”. Improvements are depreciated over years instead of deducted at once; ask your tax preparer if unsure.</p>
+    {% endif %}
+
+    <fieldset>
+      <legend>What was bought <span class="muted">(optional)</span></legend>
+      <div class="items" id="items">
+        <div class="item-row item-head" aria-hidden="true"><span>Description</span><span>Qty</span><span>Amount</span></div>
+        {% for item in values["items"] %}
+        <div class="item-row">
+          <input name="item_description" value="{{ item.description }}" aria-label="Item description">
+          <input name="item_quantity" value="{{ item.quantity }}" inputmode="decimal" aria-label="Quantity">
+          <input name="item_amount" value="{{ item.amount }}" inputmode="decimal" aria-label="Amount">
+        </div>
+        {% endfor %}
+        {% for _ in range(blank_rows) %}
+        <div class="item-row">
+          <input name="item_description" aria-label="Item description">
+          <input name="item_quantity" inputmode="decimal" aria-label="Quantity">
+          <input name="item_amount" inputmode="decimal" aria-label="Amount">
+        </div>
+        {% endfor %}
+      </div>
+      <button type="button" class="button small" id="add-item">+ Add item</button>
+    </fieldset>
+
+    <label>Notes <textarea name="notes" rows="2">{{ values.notes }}</textarea></label>
+
+    <div class="actions">
+      <button class="button primary" type="submit">Save expense</button>
+      <a class="button" href="/receipts">Later</a>
+    </div>
+  </form>
+</div>
+
+{% if receipt.ocr_text %}
+<details class="ocr">
+  <summary>Text the reader saw</summary>
+  <pre>{{ receipt.ocr_text }}</pre>
+</details>
+{% endif %}
+
+<form method="post" action="/receipts/{{ receipt.id }}/delete" class="delete-receipt"
+      onsubmit="return confirm('Delete this receipt{{ ' and its expense' if receipt.status == 'reviewed' else '' }}? This can\'t be undone.');">
+  <button class="button danger" type="submit">Delete receipt</button>
+</form>
+
+<script>
+  // Only show categories that fit the chosen property's type.
+  const property = document.getElementById("property");
+  const category = document.getElementById("category");
+  function syncCategories() {
+    const kind = property.selectedOptions[0]?.dataset.kind;
+    for (const group of category.querySelectorAll("optgroup")) {
+      const hide = kind && group.dataset.kind !== kind;
+      group.hidden = hide;
+      group.disabled = hide;
+    }
+    if (category.selectedOptions[0]?.parentElement.disabled) category.value = "";
+  }
+  property.addEventListener("change", syncCategories);
+  syncCategories();
+
+  document.getElementById("add-item").addEventListener("click", () => {
+    const rows = document.querySelectorAll("#items .item-row:not(.item-head)");
+    const copy = rows[rows.length - 1].cloneNode(true);
+    copy.querySelectorAll("input").forEach((input) => { input.value = ""; });
+    document.getElementById("items").appendChild(copy);
+    copy.querySelector("input").focus();
+  });
+</script>
+{% endblock %}

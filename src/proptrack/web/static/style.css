@@ -255,3 +255,124 @@ legend { padding: 0 6px; font-weight: 600; color: var(--muted); }
 .table tr:last-child td { border-bottom: none; }
 .table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .table-wrap { overflow-x: auto; }
+
+.button.small { min-height: 36px; padding: 4px 12px; font-size: 0.9rem; justify-self: start; }
+.badge.pending { color: #8a5a00; background: var(--warning-bg); }
+.badge.done { color: var(--rental); background: var(--rental-bg); }
+.badge.confidence-high { color: var(--rental); background: var(--rental-bg); }
+.badge.confidence-medium { color: #8a5a00; background: var(--warning-bg); }
+.badge.confidence-low { color: var(--danger); background: var(--danger-bg); }
+@media (prefers-color-scheme: dark) {
+  .badge.pending, .badge.confidence-medium { color: #f0cf73; }
+}
+
+/* Receipt list */
+.receipt-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.receipt-row {
+  display: grid;
+  grid-template-columns: 48px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  text-decoration: none;
+}
+.receipt-row:hover { border-color: var(--accent); }
+.receipt-row img { width: 48px; height: 64px; object-fit: cover; border-radius: 6px; background: var(--bg); }
+.receipt-info { display: grid; min-width: 0; }
+.receipt-info strong, .receipt-info span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.receipt-info span { font-size: 0.9rem; }
+.receipt-side { display: grid; justify-items: end; gap: 4px; }
+.amount { font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* Scan */
+.photo-picker input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.form label.photo-picker { display: block; cursor: pointer; }
+.photo-picker-box {
+  display: grid;
+  gap: 4px;
+  padding: 32px 16px;
+  text-align: center;
+  background: var(--surface);
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius);
+  font-weight: 400;
+}
+.photo-picker input:focus-visible + .photo-picker-box { outline: 2px solid var(--accent); outline-offset: 2px; }
+.busy {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 10;
+}
+.busy[hidden] { display: none; }
+.busy-box {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  max-width: 280px;
+  padding: 24px;
+  text-align: center;
+  background: var(--surface);
+  border-radius: var(--radius);
+}
+.busy-box p { margin: 0; }
+.spinner {
+  width: 36px;
+  height: 36px;
+  border: 4px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Review */
+.review { display: grid; gap: 16px; }
+@media (min-width: 720px) {
+  main:has(.review) { max-width: 1040px; }
+  .review { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); align-items: start; }
+  .review-photo { position: sticky; top: 16px; }
+}
+.review-photo { margin: 0; }
+.review-photo img {
+  display: block;
+  width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.review-photo figcaption { font-size: 0.85rem; margin-top: 4px; }
+.form label.check { display: flex; align-items: flex-start; gap: 10px; font-weight: 600; }
+.check input { width: 20px; height: 20px; margin-top: 2px; accent-color: var(--accent); }
+.check .muted { font-weight: 400; }
+.hint {
+  margin: -8px 0 0;
+  padding: 8px 12px;
+  font-size: 0.9rem;
+  background: var(--warning-bg);
+  border-radius: 8px;
+}
+.items { display: grid; gap: 6px; }
+.item-row { display: grid; grid-template-columns: minmax(0, 1fr) 56px 96px; gap: 6px; }
+.item-head { font-size: 0.8rem; color: var(--muted); font-weight: 600; }
+.form .item-row input { min-height: 40px; padding: 6px 8px; }
+.ocr { margin-top: 24px; }
+.ocr summary { cursor: pointer; color: var(--muted); }
+.ocr pre {
+  overflow-x: auto;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+}
+.delete-receipt { margin-top: 24px; }

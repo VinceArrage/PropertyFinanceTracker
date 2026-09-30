@@ -1,11 +1,13 @@
 """Web interface. Start it with `proptrack serve`, then open http://localhost:8000."""
 
+from itertools import zip_longest
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
 from proptrack.categories import list_categories
@@ -24,8 +26,28 @@ from proptrack.properties import (
     mismatched_category_count,
     update_property,
 )
+from proptrack.receipts.images import ImageError, resolve_receipt_path
+from proptrack.receipts.store import (
+    ReceiptError,
+    delete_receipt,
+    get_receipt,
+    list_receipts,
+    mark_reviewed,
+    scan_receipt,
+)
+from proptrack.transactions import (
+    NewLineItem,
+    TransactionError,
+    get_line_items,
+    get_transaction,
+    list_transactions,
+    save_transaction,
+    suggest_category_id,
+)
 
 WEB_DIR = Path(__file__).parent
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+BLANK_ITEM_ROWS = 2
 TEXT_FIELDS = ("name", "address", "monthly_rent", "tenant_name", "lease_start", "lease_end", "notes")
 SAVED_MESSAGES = {"added": "Property added.", "updated": "Changes saved."}
 
@@ -79,6 +101,102 @@ def _fields_from_values(values: dict) -> dict:
         "lease_start": values["lease_start"] if is_rental else None,
         "lease_end": values["lease_end"] if is_rental else None,
     }
+
+
+def _parse_optional_money(text: str, label: str) -> int | None:
+    text = text.strip()
+    if not text:
+        return None
+    try:
+        return parse_money(text)
+    except ValueError:
+        raise TransactionError(f"{label}: {text!r} isn't a valid amount.") from None
+
+
+def _review_values_from_receipt(receipt, transaction, items) -> dict:
+    """Prefill the review form from the saved expense, or from what the reader found."""
+    if transaction is not None:
+        return {
+            "property_id": transaction.property_id,
+            "vendor": transaction.vendor or "",
+            "date": transaction.date,
+            "total": _cents_to_input(transaction.amount_cents),
+            "tax": _cents_to_input(transaction.tax_cents),
+            "category_id": transaction.category_id,
+            "is_capital_improvement": transaction.is_capital_improvement,
+            "notes": transaction.notes or "",
+            "items": [
+                {
+                    "description": item.description,
+                    "quantity": "" if item.quantity is None else f"{item.quantity:g}",
+                    "amount": _cents_to_input(item.total_cents),
+                }
+                for item in items
+            ],
+        }
+    parsed = receipt.parsed
+    return {
+        "property_id": receipt.property_id,
+        "vendor": parsed.vendor or "",
+        "date": parsed.date or "",
+        "total": _cents_to_input(parsed.total_cents),
+        "tax": _cents_to_input(parsed.tax_cents),
+        "category_id": None,
+        "is_capital_improvement": False,
+        "notes": "",
+        "items": [
+            {
+                "description": item.description,
+                "quantity": "" if item.quantity is None else f"{item.quantity:g}",
+                "amount": _cents_to_input(item.total_cents),
+            }
+            for item in parsed.items
+        ],
+    }
+
+
+def _review_values_from_form(form) -> dict:
+    rows = zip_longest(
+        form.getlist("item_description"), form.getlist("item_quantity"), form.getlist("item_amount"), fillvalue=""
+    )
+    category = str(form.get("category_id") or "")
+    prop = str(form.get("property_id") or "")
+    return {
+        "property_id": int(prop) if prop.isdigit() else None,
+        "vendor": str(form.get("vendor") or "").strip(),
+        "date": str(form.get("date") or "").strip(),
+        "total": str(form.get("total") or "").strip(),
+        "tax": str(form.get("tax") or "").strip(),
+        "category_id": int(category) if category.isdigit() else None,
+        "is_capital_improvement": form.get("is_capital_improvement") == "on",
+        "notes": str(form.get("notes") or "").strip(),
+        "items": [
+            {"description": str(d).strip(), "quantity": str(q).strip(), "amount": str(a).strip()}
+            for d, q, a in rows
+            if str(d).strip() or str(a).strip()
+        ],
+    }
+
+
+def _line_items_from_values(values: dict) -> list[NewLineItem]:
+    items = []
+    for number, row in enumerate(values["items"], start=1):
+        if not row["description"]:
+            raise TransactionError(f"Item {number} needs a description.")
+        amount = _parse_optional_money(row["amount"], f"Item {number}")
+        if amount is None:
+            raise TransactionError(f"Item {number} needs an amount.")
+        quantity = None
+        if row["quantity"]:
+            try:
+                quantity = float(row["quantity"])
+            except ValueError:
+                raise TransactionError(f"Item {number}: quantity must be a number.") from None
+            if quantity <= 0:
+                raise TransactionError(f"Item {number}: quantity must be more than zero.")
+        unit_price = round(amount / quantity) if quantity else None
+        items.append(NewLineItem(row["description"], amount, quantity, unit_price))
+    return items
 
 
 def create_app(config: Config | None = None) -> FastAPI:
@@ -167,6 +285,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             prop=prop,
             counts=linked_record_counts(conn, prop.id),
             categories=list_categories(conn, prop.is_rental),
+            expenses=list_transactions(conn, prop.id, limit=20),
             notice=SAVED_MESSAGES.get(saved),
         )
 
@@ -230,6 +349,130 @@ def create_app(config: Config | None = None) -> FastAPI:
                 counts=linked_record_counts(conn, prop.id), error=str(exc),
             )
         return RedirectResponse("/properties?deleted=true", status_code=303)
+
+    # ---- Receipts -------------------------------------------------------------
+
+    def load_receipt(conn, receipt_id: int):
+        receipt = get_receipt(conn, receipt_id)
+        if receipt is None:
+            raise HTTPException(status_code=404, detail="That receipt doesn't exist.")
+        return receipt
+
+    @app.get("/receipts")
+    async def receipts_page(request: Request, saved: bool = False, deleted: bool = False, conn=Depends(get_conn)):
+        return render(
+            request, "receipts.html", active="receipts", receipts=list_receipts(conn),
+            has_properties=bool(list_properties(conn)), saved=saved, deleted=deleted,
+        )
+
+    def scan_form(request, conn, *, property_id=None, error=None, status=200):
+        return render(
+            request, "receipt_new.html", status_code=status, active="receipts",
+            properties=list_properties(conn), property_id=property_id, error=error,
+        )
+
+    @app.get("/receipts/new")
+    async def new_receipt_page(request: Request, property: int | None = None, conn=Depends(get_conn)):
+        last = request.cookies.get("last_property", "")
+        property_id = property or (int(last) if last.isdigit() else None)
+        return scan_form(request, conn, property_id=property_id)
+
+    @app.post("/receipts/new")
+    async def upload_receipt(request: Request, conn=Depends(get_conn)):
+        form = await request.form()
+        prop = str(form.get("property_id") or "")
+        property_id = int(prop) if prop.isdigit() else None
+        upload = form.get("photo")
+        if property_id is None or get_property(conn, property_id) is None:
+            return scan_form(request, conn, error="Pick which property this receipt is for.", status=400)
+        if upload is None or not hasattr(upload, "read"):
+            return scan_form(request, conn, property_id=property_id, error="Take or choose a photo.", status=400)
+        photo = await upload.read(MAX_UPLOAD_BYTES + 1)
+        if not photo:
+            return scan_form(request, conn, property_id=property_id, error="Take or choose a photo.", status=400)
+        if len(photo) > MAX_UPLOAD_BYTES:
+            return scan_form(request, conn, property_id=property_id, error="That photo is too large (25 MB max).", status=400)
+
+        # Reading a receipt takes a few seconds of CPU, so it runs on a worker thread
+        # with its own database connection instead of blocking the server.
+        def scan() -> int:
+            worker_conn = connect(config.db_path)
+            try:
+                return scan_receipt(
+                    worker_conn, property_id=property_id, photo=photo,
+                    receipts_dir=config.receipts_dir, tesseract_cmd=config.tesseract_cmd,
+                ).id
+            finally:
+                worker_conn.close()
+
+        try:
+            receipt_id = await run_in_threadpool(scan)
+        except (ImageError, ReceiptError) as exc:
+            return scan_form(request, conn, property_id=property_id, error=str(exc), status=400)
+        response = RedirectResponse(f"/receipts/{receipt_id}", status_code=303)
+        response.set_cookie("last_property", str(property_id), max_age=365 * 24 * 3600, samesite="lax")
+        return response
+
+    def review_page(request, conn, receipt, values, *, error=None, status=200):
+        properties = list_properties(conn)
+        selected = next((p for p in properties if p.id == values["property_id"]), None)
+        if values["category_id"] is None and selected is not None and not error:
+            values["category_id"] = suggest_category_id(conn, values["vendor"], selected.is_rental)
+        return render(
+            request, "receipt_review.html", status_code=status, active="receipts",
+            receipt=receipt, values=values, properties=properties, selected=selected,
+            rental_categories=list_categories(conn, is_rental=True),
+            personal_categories=list_categories(conn, is_rental=False),
+            blank_rows=BLANK_ITEM_ROWS, error=error,
+        )
+
+    @app.get("/receipts/{receipt_id}")
+    async def receipt_page(request: Request, receipt_id: int, conn=Depends(get_conn)):
+        receipt = load_receipt(conn, receipt_id)
+        transaction = get_transaction(conn, receipt.transaction_id) if receipt.transaction_id else None
+        items = get_line_items(conn, transaction.id) if transaction else []
+        return review_page(request, conn, receipt, _review_values_from_receipt(receipt, transaction, items))
+
+    @app.post("/receipts/{receipt_id}")
+    async def save_receipt(request: Request, receipt_id: int, conn=Depends(get_conn)):
+        receipt = load_receipt(conn, receipt_id)
+        values = _review_values_from_form(await request.form())
+        try:
+            if values["property_id"] is None:
+                raise TransactionError("Pick a property.")
+            total = _parse_optional_money(values["total"], "Total")
+            transaction_id = save_transaction(
+                conn,
+                property_id=values["property_id"],
+                date=values["date"],
+                vendor=values["vendor"],
+                amount_cents=total,
+                tax_cents=_parse_optional_money(values["tax"], "Tax"),
+                category_id=values["category_id"],
+                is_capital_improvement=values["is_capital_improvement"],
+                source="receipt",
+                notes=values["notes"],
+                items=_line_items_from_values(values),
+                transaction_id=receipt.transaction_id,
+            )
+        except TransactionError as exc:
+            return review_page(request, conn, receipt, values, error=str(exc), status=400)
+        mark_reviewed(conn, receipt.id, property_id=values["property_id"], transaction_id=transaction_id)
+        return RedirectResponse("/receipts?saved=true", status_code=303)
+
+    @app.get("/receipts/{receipt_id}/image")
+    async def receipt_image(receipt_id: int, conn=Depends(get_conn)):
+        receipt = load_receipt(conn, receipt_id)
+        path = resolve_receipt_path(config.receipts_dir, receipt.image_path)
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="The photo for this receipt is missing.")
+        return FileResponse(path, media_type="image/jpeg")
+
+    @app.post("/receipts/{receipt_id}/delete")
+    async def remove_receipt(receipt_id: int, conn=Depends(get_conn)):
+        load_receipt(conn, receipt_id)
+        delete_receipt(conn, receipt_id, config.receipts_dir)
+        return RedirectResponse("/receipts?deleted=true", status_code=303)
 
     @app.get("/categories")
     async def categories_page(request: Request, conn=Depends(get_conn)):

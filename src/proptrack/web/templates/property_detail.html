@@ -5,6 +5,7 @@
 <div class="page-head">
   <h1>{{ prop.name }} <span class="badge {{ prop.kind }}">{{ prop.kind|capitalize }}</span></h1>
   <div class="actions">
+    <a class="button primary" href="/receipts/new?property={{ prop.id }}">Scan receipt</a>
     <a class="button" href="/properties/{{ prop.id }}/edit">Edit</a>
     <a class="button danger" href="/properties/{{ prop.id }}/delete">Delete</a>
   </div>
@@ -25,6 +26,27 @@
   <dt>Records</dt>
   <dd>{{ counts.transactions }} expenses · {{ counts.receipts }} receipts{% if prop.is_rental %} · {{ counts.rent_payments }} rent payments{% endif %}</dd>
 </dl>
+
+<h2>Recent expenses</h2>
+{% if expenses %}
+<div class="table-wrap">
+<table class="table">
+  <thead><tr><th>Date</th><th>Store</th><th>Category</th><th class="num">Amount</th></tr></thead>
+  <tbody>
+    {% for e in expenses %}
+    <tr>
+      <td>{{ e.date }}</td>
+      <td>{{ e.vendor or "—" }}</td>
+      <td>{{ e.category_name or "Uncategorized" }}{% if e.is_capital_improvement %} <span class="badge pending">Improvement</span>{% endif %}</td>
+      <td class="num">{{ e.amount_cents|money }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="muted">No expenses yet. <a href="/receipts/new?property={{ prop.id }}">Scan a receipt</a> to add one.</p>
+{% endif %}
 
 <h2>Expense categories</h2>
 <p class="muted">{% if prop.is_rental %}Rental categories follow IRS Schedule E.{% else %}Categories for a personal home.{% endif %}</p>
