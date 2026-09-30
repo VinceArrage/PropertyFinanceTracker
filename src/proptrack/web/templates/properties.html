@@ -23,8 +23,11 @@
           <span class="badge {{ p.kind }}">{{ p.kind|capitalize }}</span>
         </div>
         {% if p.address %}<div class="muted">{{ p.address }}</div>{% endif %}
-        {% if p.is_rental and p.monthly_rent_cents is not none %}
-          <div class="rent">{{ p.monthly_rent_cents|money }} <span class="muted">/ month</span></div>
+        {% if p.is_rental %}
+          <div class="rent">
+            {% if p.total_rent_cents is not none %}{{ p.total_rent_cents|money }} <span class="muted">/ month · </span>{% endif %}
+            <span class="muted">{{ p.units|length }} unit{{ "s" if p.units|length != 1 }}</span>
+          </div>
         {% endif %}
       </a>
     </li>

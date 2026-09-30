@@ -3,7 +3,7 @@
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # Version 1: the original schema below. Later versions are applied in order from
 # MIGRATIONS so existing databases are upgraded in place.
@@ -82,6 +82,29 @@ CREATE INDEX IF NOT EXISTS idx_rent_property_date ON rent_payments(property_id, 
 MIGRATIONS = {
     # What the reader extracted (store, date, totals, items, warnings) as JSON, for the review screen.
     2: "ALTER TABLE receipts ADD COLUMN parsed_json TEXT;",
+    # Rentals can have several units (apartments), each with its own rent, tenant and lease.
+    # Existing rental details move into a unit "1" of their property.
+    3: """
+        CREATE TABLE units (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,  -- never reuse ids of removed units
+            property_id         INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+            label               TEXT NOT NULL COLLATE NOCASE,
+            monthly_rent_cents  INTEGER CHECK (monthly_rent_cents IS NULL OR monthly_rent_cents >= 0),
+            tenant_name         TEXT,
+            lease_start         TEXT,
+            lease_end           TEXT,
+            position            INTEGER NOT NULL DEFAULT 0,
+            UNIQUE (property_id, label)
+        );
+        INSERT INTO units (property_id, label, monthly_rent_cents, tenant_name, lease_start, lease_end)
+            SELECT id, '1', monthly_rent_cents, tenant_name, lease_start, lease_end
+            FROM properties WHERE is_rental = 1;
+        ALTER TABLE properties DROP COLUMN monthly_rent_cents;
+        ALTER TABLE properties DROP COLUMN tenant_name;
+        ALTER TABLE properties DROP COLUMN lease_start;
+        ALTER TABLE properties DROP COLUMN lease_end;
+        ALTER TABLE rent_payments ADD COLUMN unit_id INTEGER REFERENCES units(id);
+    """,
 }
 
 # (name, Schedule E line). Capital improvements are depreciated over years

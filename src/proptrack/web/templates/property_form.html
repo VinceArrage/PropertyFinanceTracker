@@ -1,5 +1,28 @@
 {% extends "base.html" %}
 {% block title %}{{ heading }} · Property Tracker{% endblock %}
+
+{% macro unit_block(u, n) %}
+<fieldset class="unit">
+  <legend>Unit <span class="unit-number">{{ n }}</span></legend>
+  <input type="hidden" name="unit_id" value="{{ u.id }}">
+  <div class="row">
+    <label>Apartment / unit no.
+      <input name="unit_label" value="{{ u.label }}" maxlength="30" placeholder="e.g. {{ n }}, 2B, Upper">
+    </label>
+    <label>Monthly rent
+      <input name="unit_rent" inputmode="decimal" value="{{ u.monthly_rent }}" placeholder="1800">
+    </label>
+  </div>
+  <label>Tenant name
+    <input name="unit_tenant" value="{{ u.tenant_name }}">
+  </label>
+  <div class="row">
+    <label>Lease start <input type="date" name="unit_lease_start" value="{{ u.lease_start }}"></label>
+    <label>Lease end <input type="date" name="unit_lease_end" value="{{ u.lease_end }}"></label>
+  </div>
+</fieldset>
+{% endmacro %}
+
 {% block content %}
 <h1>{{ heading }}</h1>
 
@@ -25,28 +48,67 @@
     <span>This is a rental property</span>
   </label>
 
-  <fieldset class="rental-fields">
-    <legend>Rental details</legend>
-    <label>Monthly rent
-      <input name="monthly_rent" inputmode="decimal" value="{{ values.monthly_rent }}" placeholder="1800">
+  <div class="rental-fields">
+    <label class="unit-count">Number of units
+      <input type="number" name="unit_count" id="unit_count" min="1" max="50" step="1" inputmode="numeric"
+             value="{{ values.unit_count }}">
     </label>
-    <label>Tenant name
-      <input name="tenant_name" value="{{ values.tenant_name }}">
-    </label>
-    <div class="row">
-      <label>Lease start <input type="date" name="lease_start" value="{{ values.lease_start }}"></label>
-      <label>Lease end <input type="date" name="lease_end" value="{{ values.lease_end }}"></label>
+    <div class="units" id="units">
+      {% for u in values.units %}{{ unit_block(u, loop.index) }}{% endfor %}
     </div>
-  </fieldset>
+    <p class="muted unit-total" id="unit-total" hidden></p>
+  </div>
 
   <label>Notes
     <textarea name="notes" rows="3">{{ values.notes }}</textarea>
   </label>
 
-  {% if warnings %}<input type="hidden" name="confirm_switch" value="1">{% endif %}
+  {% if warnings %}<input type="hidden" name="confirmed" value="1">{% endif %}
   <div class="actions">
     <button class="button primary" type="submit">{{ "Confirm and save" if warnings else submit_label }}</button>
     <a class="button" href="{{ cancel_url }}">Cancel</a>
   </div>
 </form>
+
+<template id="unit-template">{{ unit_block({"id": "", "label": "", "monthly_rent": "", "tenant_name": "", "lease_start": "", "lease_end": ""}, "__N__") }}</template>
+
+<script>
+  // Show one block per unit. Blocks past the chosen number are hidden and disabled
+  // (so they aren't sent) rather than deleted, so a typo in the number loses nothing.
+  const count = document.getElementById("unit_count");
+  const list = document.getElementById("units");
+  const template = document.getElementById("unit-template");
+  const total = document.getElementById("unit-total");
+
+  function wanted() {
+    return Math.max(1, Math.min(50, parseInt(count.value, 10) || 1));
+  }
+
+  function syncUnits() {
+    const n = wanted();
+    while (list.children.length < n) {
+      list.insertAdjacentHTML("beforeend", template.innerHTML.replaceAll("__N__", list.children.length + 1));
+    }
+    [...list.children].forEach((block, i) => {
+      const hide = i >= n;
+      block.hidden = hide;
+      block.querySelectorAll("input").forEach((input) => { input.disabled = hide; });
+    });
+    updateTotal();
+  }
+
+  function updateTotal() {
+    const rents = [...list.querySelectorAll("fieldset:not([hidden]) [name=unit_rent]")]
+      .map((input) => parseFloat(input.value.replace(/[$,]/g, "")))
+      .filter((value) => !Number.isNaN(value));
+    total.hidden = rents.length === 0 || wanted() < 2;
+    const sum = rents.reduce((a, b) => a + b, 0);
+    total.textContent = "Total monthly rent: " + sum.toLocaleString("en-US", { style: "currency", currency: "USD" });
+  }
+
+  count.addEventListener("change", syncUnits);
+  count.addEventListener("input", () => { if (parseInt(count.value, 10) > list.querySelectorAll("fieldset:not([hidden])").length) syncUnits(); });
+  list.addEventListener("input", (event) => { if (event.target.name === "unit_rent") updateTotal(); });
+  syncUnits();
+</script>
 {% endblock %}

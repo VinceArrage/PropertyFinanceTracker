@@ -15,9 +15,10 @@ from proptrack.config import Config, load_config
 from proptrack.db import connect, init_db
 from proptrack.money import format_cents, parse_money
 from proptrack.properties import (
-    RENTAL_ONLY_FIELDS,
+    MAX_UNITS,
     Property,
     PropertyError,
+    UnitInput,
     add_property,
     delete_property,
     get_property,
@@ -48,8 +49,16 @@ from proptrack.transactions import (
 WEB_DIR = Path(__file__).parent
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 BLANK_ITEM_ROWS = 2
-TEXT_FIELDS = ("name", "address", "monthly_rent", "tenant_name", "lease_start", "lease_end", "notes")
 SAVED_MESSAGES = {"added": "Property added.", "updated": "Changes saved."}
+# Form field name -> key in a unit's form values. Each unit block posts one of each.
+UNIT_FORM_FIELDS = {
+    "unit_id": "id",
+    "unit_label": "label",
+    "unit_rent": "monthly_rent",
+    "unit_tenant": "tenant_name",
+    "unit_lease_start": "lease_start",
+    "unit_lease_end": "lease_end",
+}
 
 
 def _cents_to_input(cents: int | None) -> str:
@@ -59,48 +68,86 @@ def _cents_to_input(cents: int | None) -> str:
     return f"{dollars}.{remainder:02d}"
 
 
+def _blank_unit() -> dict:
+    return {key: "" for key in UNIT_FORM_FIELDS.values()}
+
+
 def _empty_values() -> dict:
-    return {key: "" for key in TEXT_FIELDS} | {"is_rental": False}
+    return {"name": "", "address": "", "notes": "", "is_rental": False, "unit_count": "1", "units": [_blank_unit()]}
 
 
 def _values_from_property(prop: Property) -> dict:
+    units = [
+        {
+            "id": str(unit.id),
+            "label": unit.label,
+            "monthly_rent": _cents_to_input(unit.monthly_rent_cents),
+            "tenant_name": unit.tenant_name or "",
+            "lease_start": unit.lease_start or "",
+            "lease_end": unit.lease_end or "",
+        }
+        for unit in prop.units
+    ] or [_blank_unit()]
     return {
         "name": prop.name,
         "address": prop.address or "",
-        "monthly_rent": _cents_to_input(prop.monthly_rent_cents),
-        "tenant_name": prop.tenant_name or "",
-        "lease_start": prop.lease_start or "",
-        "lease_end": prop.lease_end or "",
         "notes": prop.notes or "",
         "is_rental": prop.is_rental,
+        "unit_count": str(len(units)),
+        "units": units,
     }
 
 
 def _values_from_form(form) -> dict:
-    return {key: str(form.get(key) or "").strip() for key in TEXT_FIELDS} | {
-        "is_rental": form.get("is_rental") == "on"
-    }
-
-
-def _fields_from_values(values: dict) -> dict:
-    """Turn form strings into property fields. Rental details are dropped for personal homes."""
-    is_rental = values["is_rental"]
-    rent = None
-    if is_rental and values["monthly_rent"]:
-        try:
-            rent = parse_money(values["monthly_rent"])
-        except ValueError as exc:
-            raise PropertyError(str(exc)) from None
+    columns = [form.getlist(field) for field in UNIT_FORM_FIELDS]
+    units = [
+        {key: str(value).strip() for key, value in zip(UNIT_FORM_FIELDS.values(), row)}
+        for row in zip_longest(*columns, fillvalue="")
+    ]
     return {
-        "name": values["name"],
-        "address": values["address"],
-        "notes": values["notes"],
-        "is_rental": is_rental,
-        "monthly_rent_cents": rent,
-        "tenant_name": values["tenant_name"] if is_rental else None,
-        "lease_start": values["lease_start"] if is_rental else None,
-        "lease_end": values["lease_end"] if is_rental else None,
+        "name": str(form.get("name") or "").strip(),
+        "address": str(form.get("address") or "").strip(),
+        "notes": str(form.get("notes") or "").strip(),
+        "is_rental": form.get("is_rental") == "on",
+        "unit_count": str(form.get("unit_count") or "1").strip(),
+        "units": units or [_blank_unit()],
     }
+
+
+def _fields_from_values(values: dict) -> tuple[dict, list[UnitInput]]:
+    """Turn form strings into property fields and units. Units are ignored for personal homes.
+
+    The unit list is cut or padded to the "Number of units" value, so lowering the
+    number removes the last units.
+    """
+    fields = {key: values[key] for key in ("name", "address", "notes", "is_rental")}
+    if not values["is_rental"]:
+        return fields, []
+
+    count = values["unit_count"]
+    if not count.isdigit() or not 1 <= int(count) <= MAX_UNITS:
+        raise PropertyError(f"Number of units must be a whole number from 1 to {MAX_UNITS}.")
+    rows = (values["units"] + [_blank_unit() for _ in range(int(count))])[: int(count)]
+
+    units = []
+    for number, row in enumerate(rows, start=1):
+        rent = None
+        if row["monthly_rent"]:
+            try:
+                rent = parse_money(row["monthly_rent"])
+            except ValueError as exc:
+                raise PropertyError(f"Unit {row['label'] or number}: {exc}") from None
+        units.append(
+            UnitInput(
+                label=row["label"],
+                monthly_rent_cents=rent,
+                tenant_name=row["tenant_name"],
+                lease_start=row["lease_start"],
+                lease_end=row["lease_end"],
+                id=int(row["id"]) if row["id"].isdigit() else None,
+            )
+        )
+    return fields, units
 
 
 def _parse_optional_money(text: str, label: str) -> int | None:
@@ -267,7 +314,8 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def create_property(request: Request, conn=Depends(get_conn)):
         values = _values_from_form(await request.form())
         try:
-            prop = add_property(conn, **_fields_from_values(values))
+            fields, units = _fields_from_values(values)
+            prop = add_property(conn, units=units, **fields)
         except PropertyError as exc:
             return property_form(
                 request, heading="Add property", submit_label="Add property", cancel_url="/properties",
@@ -307,26 +355,37 @@ def create_app(config: Config | None = None) -> FastAPI:
             cancel_url=f"/properties/{prop.id}", values=values,
         )
         try:
-            fields = _fields_from_values(values)
+            fields, units = _fields_from_values(values)
         except PropertyError as exc:
             return property_form(request, **form_args, error=str(exc), status=400)
 
-        # Switching between rental and personal needs an explicit confirmation.
-        if fields["is_rental"] != prop.is_rental and form.get("confirm_switch") != "1":
+        # Switching type or removing units loses details, so it needs an explicit confirmation.
+        warnings = []
+        if fields["is_rental"] != prop.is_rental:
             target = "rental" if fields["is_rental"] else "personal"
-            warnings = [f"This will switch {prop.name} to a {target} property."]
+            warnings.append(f"This will switch {prop.name} to a {target} property.")
             mismatched = mismatched_category_count(conn, prop.id, fields["is_rental"])
             if mismatched:
                 warnings.append(
                     f"{mismatched} expense(s) use categories that don't apply to a {target} "
                     "property and will need recategorizing."
                 )
-            if not fields["is_rental"] and any(getattr(prop, key) is not None for key in RENTAL_ONLY_FIELDS):
-                warnings.append("The rent, tenant and lease details will be cleared.")
+            if not fields["is_rental"] and prop.units:
+                warnings.append(
+                    f"Its {len(prop.units)} unit(s) and their rent, tenant and lease details will be removed."
+                )
+        elif prop.is_rental:
+            kept = {unit.id for unit in units}
+            removed = [unit.label for unit in prop.units if unit.id not in kept]
+            if removed:
+                warnings.append(
+                    f"Unit(s) {', '.join(removed)} and their rent, tenant and lease details will be removed."
+                )
+        if warnings and form.get("confirmed") != "1":
             return property_form(request, **form_args, warnings=warnings)
 
         try:
-            update_property(conn, prop.id, **fields)
+            update_property(conn, prop.id, units=units, **fields)
         except PropertyError as exc:
             return property_form(request, **form_args, error=str(exc), status=400)
         return RedirectResponse(f"/properties/{prop.id}?saved=updated", status_code=303)

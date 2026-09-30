@@ -16,39 +16,57 @@ def test_init_creates_database(data_dir):
     assert (data_dir / "receipts").is_dir()
 
 
-def test_add_interactive_rental(data_dir):
-    answers = "Test Duplex\n1 Fake St\ny\n1,800\nTenant A\n2026-01-01\n2026-12-31\n"
+def test_add_interactive_rental_with_units(data_dir):
+    answers = "\n".join(
+        [
+            "Test Duplex", "1 Fake St", "y", "2",
+            "1A", "1,800", "Tenant A", "2026-01-01", "2026-12-31",  # unit 1
+            "", "1,200", "", "", "",  # unit 2: default number, no tenant or lease
+        ]
+    ) + "\n"
     result = run("property", "add", input=answers)
     assert result.exit_code == 0, result.output
-    assert "Added Test Duplex (rental)" in result.output
+    assert "Added Test Duplex (rental, 2 units)" in result.output
 
-    listing = run("property", "list")
-    assert "Test Duplex" in listing.output
-    assert "$1,800.00" in listing.output
+    listing = run("property", "list").output
+    assert "Test Duplex" in listing
+    assert "$3,000.00" in listing  # total of both units
+
+    shown = run("property", "show", "Test Duplex").output
+    assert "1A" in shown
+    assert "Tenant A" in shown
+    assert "$1,200.00" in shown
 
 
-def test_add_interactive_personal_skips_rent_questions(data_dir):
+def test_add_interactive_personal_skips_rental_questions(data_dir):
     result = run("property", "add", input="Home\n2 Fake Ave\nn\n")
     assert result.exit_code == 0, result.output
-    assert "Monthly rent" not in result.output
+    assert "How many units" not in result.output
     assert "Added Home (personal)" in result.output
 
 
 def test_add_with_flags(data_dir):
-    result = run("property", "add", "Home", "--personal", "--address", "2 Fake Ave")
+    result = run("property", "add", "Fourplex", "--rental", "--units", "4")
     assert result.exit_code == 0, result.output
+    assert "4 units" in result.output
+
+
+def test_units_flag_needs_rental(data_dir):
+    result = run("property", "add", "Home", "--personal", "--units", "2")
+    assert result.exit_code == 1
+    assert "Only rental properties have units" in result.output
 
 
 def test_add_rejects_bad_rent(data_dir):
-    result = run("property", "add", "Duplex", "--rental", "--rent", "lots")
+    result = run("property", "add", input="Duplex\n\ny\n1\n1\nlots\n")
     assert result.exit_code == 1
     assert "Not a valid amount" in result.output
 
 
 def test_edit_switch_to_personal_needs_confirmation(data_dir):
-    run("property", "add", "Duplex", "--rental", "--rent", "1000")
+    run("property", "add", "Duplex", "--rental", "--units", "2")
     declined = run("property", "edit", "Duplex", "--personal", input="n\n")
-    assert "will be cleared" in declined.output
+    assert "2 unit(s)" in declined.output
     assert "(rental)" in run("property", "show", "Duplex").output
 
     accepted = run("property", "edit", "Duplex", "--personal", "--yes")

@@ -5,6 +5,7 @@ import sqlite3
 from pathlib import Path
 from typing import Annotated, Optional
 
+import click
 import typer
 from rich.console import Console
 from rich.markup import escape
@@ -15,9 +16,11 @@ from proptrack.config import load_config
 from proptrack.db import connect, init_db
 from proptrack.money import format_cents, parse_money
 from proptrack.properties import (
-    RENTAL_ONLY_FIELDS,
+    MAX_UNITS,
     Property,
     PropertyError,
+    Unit,
+    UnitInput,
     add_property,
     delete_property,
     get_property,
@@ -61,10 +64,35 @@ def _require_property(conn: sqlite3.Connection, name: str) -> Property:
     return prop
 
 
-def _lease_text(prop: Property) -> str:
-    if not (prop.lease_start or prop.lease_end):
+def _lease_text(unit: Unit) -> str:
+    if not (unit.lease_start or unit.lease_end):
         return ""
-    return f"{prop.lease_start or '?'} to {prop.lease_end or '?'}"
+    return f"{unit.lease_start or '?'} to {unit.lease_end or '?'}"
+
+
+def _money_or_blank(cents: int | None) -> str:
+    return format_cents(cents) if cents is not None else ""
+
+
+def _prompt_optional(text: str) -> str:
+    return typer.prompt(f"{text} (blank to skip)", default="", show_default=False)
+
+
+def _prompt_units(count: int) -> list[UnitInput]:
+    units = []
+    for number in range(1, count + 1):
+        if count > 1:
+            console.print(f"[bold]Unit {number}[/bold]")
+        units.append(
+            UnitInput(
+                label=typer.prompt("  Apartment / unit no.", default=str(number)),
+                monthly_rent_cents=_parse_rent(_prompt_optional("  Monthly rent")),
+                tenant_name=_prompt_optional("  Tenant name"),
+                lease_start=_prompt_optional("  Lease start YYYY-MM-DD"),
+                lease_end=_prompt_optional("  Lease end YYYY-MM-DD"),
+            )
+        )
+    return units
 
 
 @app.command()
@@ -116,45 +144,36 @@ def property_add(
     rental: Annotated[
         Optional[bool], typer.Option("--rental/--personal", help="Is this a rental property?")
     ] = None,
-    rent: Annotated[Optional[str], typer.Option(help="Monthly rent, e.g. 1800 (rentals only).")] = None,
-    tenant: Annotated[Optional[str], typer.Option(help="Tenant name (rentals only).")] = None,
-    lease_start: Annotated[Optional[str], typer.Option(help="YYYY-MM-DD (rentals only).")] = None,
-    lease_end: Annotated[Optional[str], typer.Option(help="YYYY-MM-DD (rentals only).")] = None,
+    units: Annotated[
+        Optional[int], typer.Option(min=1, max=MAX_UNITS, help="Number of units (rentals only).")
+    ] = None,
     notes: Annotated[Optional[str], typer.Option(help="Anything else worth remembering.")] = None,
 ) -> None:
-    """Add a property. Run with no arguments to be asked step by step."""
+    """Add a property. Run with no arguments to be asked step by step, including each unit."""
     interactive = name is None
     if interactive:
         name = typer.prompt("Property name (e.g. 'Elm St duplex')")
         address = address or typer.prompt("Address", default="", show_default=False)
     if rental is None:
         rental = typer.confirm("Is this a rental property?", default=False)
-    if interactive and rental:
-        rent = rent or typer.prompt("Monthly rent (blank to skip)", default="", show_default=False)
-        tenant = tenant or typer.prompt("Tenant name (blank to skip)", default="", show_default=False)
-        lease_start = lease_start or typer.prompt(
-            "Lease start YYYY-MM-DD (blank to skip)", default="", show_default=False
-        )
-        lease_end = lease_end or typer.prompt(
-            "Lease end YYYY-MM-DD (blank to skip)", default="", show_default=False
-        )
+    if units is not None and not rental:
+        _fail("Only rental properties have units.")
+
+    unit_inputs: list[UnitInput] = []
+    if rental:
+        if interactive:
+            count = units or typer.prompt("How many units?", default=1, type=click.IntRange(1, MAX_UNITS))
+            unit_inputs = _prompt_units(count)
+        else:
+            unit_inputs = [UnitInput() for _ in range(units or 1)]
 
     conn = _open_db()
     try:
-        prop = add_property(
-            conn,
-            name,
-            address=address,
-            is_rental=rental,
-            monthly_rent_cents=_parse_rent(rent),
-            tenant_name=tenant or None,
-            lease_start=lease_start or None,
-            lease_end=lease_end or None,
-            notes=notes,
-        )
+        prop = add_property(conn, name, address=address, is_rental=rental, notes=notes, units=unit_inputs)
     except PropertyError as exc:
         _fail(str(exc))
-    console.print(f"Added [bold]{escape(prop.name)}[/bold] ({prop.kind}).")
+    detail = f", {len(prop.units)} unit{'s' if len(prop.units) != 1 else ''}" if prop.is_rental else ""
+    console.print(f"Added [bold]{escape(prop.name)}[/bold] ({prop.kind}{detail}).")
 
 
 @property_app.command("list")
@@ -164,15 +183,14 @@ def property_list() -> None:
     if not props:
         console.print("No properties yet. Add one with 'proptrack property add'.")
         return
-    table = Table("Name", "Type", "Address", "Monthly rent", "Tenant", "Lease")
+    table = Table("Name", "Type", "Address", "Units", "Monthly rent")
     for prop in props:
         table.add_row(
             escape(prop.name),
             prop.kind,
             escape(prop.address or ""),
-            format_cents(prop.monthly_rent_cents) if prop.monthly_rent_cents is not None else "",
-            escape(prop.tenant_name or ""),
-            _lease_text(prop),
+            str(len(prop.units)) if prop.is_rental else "",
+            _money_or_blank(prop.total_rent_cents),
         )
     console.print(table)
 
@@ -185,10 +203,14 @@ def property_show(name: Annotated[str, typer.Argument(help="Property name.")]) -
     console.print(f"[bold]{escape(prop.name)}[/bold] ({prop.kind})")
     console.print(f"  Address: {escape(prop.address or '-')}")
     if prop.is_rental:
-        rent = format_cents(prop.monthly_rent_cents) if prop.monthly_rent_cents is not None else "-"
-        console.print(f"  Monthly rent: {rent}")
-        console.print(f"  Tenant: {escape(prop.tenant_name or '-')}")
-        console.print(f"  Lease: {_lease_text(prop) or '-'}")
+        console.print(f"  Monthly rent: {_money_or_blank(prop.total_rent_cents) or '-'}")
+        table = Table("Apt / unit", "Tenant", "Lease", "Rent")
+        for unit in prop.units:
+            table.add_row(
+                escape(unit.label), escape(unit.tenant_name or ""), _lease_text(unit),
+                _money_or_blank(unit.monthly_rent_cents),
+            )
+        console.print(table)
     if prop.notes:
         console.print(f"  Notes: {escape(prop.notes)}")
     counts = linked_record_counts(conn, prop.id)
@@ -208,26 +230,16 @@ def property_edit(
     rental: Annotated[
         Optional[bool], typer.Option("--rental/--personal", help="Switch between rental and personal.")
     ] = None,
-    rent: Annotated[Optional[str], typer.Option(help="Monthly rent (rentals only).")] = None,
-    tenant: Annotated[Optional[str], typer.Option(help="Tenant name (rentals only).")] = None,
-    lease_start: Annotated[Optional[str], typer.Option(help="YYYY-MM-DD (rentals only).")] = None,
-    lease_end: Annotated[Optional[str], typer.Option(help="YYYY-MM-DD (rentals only).")] = None,
     notes: Annotated[Optional[str], typer.Option(help="Notes.")] = None,
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask for confirmation.")] = False,
 ) -> None:
-    """Change a property's details, or switch it between rental and personal."""
+    """Change a property's details, or switch it between rental and personal.
+
+    To change units (apartment numbers, rent, tenants, leases), use the web app.
+    """
     conn = _open_db()
     prop = _require_property(conn, name)
-    changes = {
-        "name": new_name,
-        "address": address,
-        "is_rental": rental,
-        "monthly_rent_cents": _parse_rent(rent),
-        "tenant_name": tenant,
-        "lease_start": lease_start,
-        "lease_end": lease_end,
-        "notes": notes,
-    }
+    changes = {"name": new_name, "address": address, "is_rental": rental, "notes": notes}
     changes = {key: value for key, value in changes.items() if value is not None}
     if not changes:
         _fail("Nothing to change. See 'proptrack property edit --help'.")
@@ -240,8 +252,11 @@ def property_edit(
                 f"[yellow]{mismatched} expense(s) use categories that don't apply to a {target} "
                 "property. You'll need to recategorize them.[/yellow]"
             )
-        if not rental and any(getattr(prop, key) is not None for key in RENTAL_ONLY_FIELDS):
-            console.print("[yellow]The rent, tenant and lease details will be cleared.[/yellow]")
+        if not rental and prop.units:
+            console.print(
+                f"[yellow]Its {len(prop.units)} unit(s) and their rent, tenant and lease details "
+                "will be removed.[/yellow]"
+            )
         if not yes and not typer.confirm(f"Switch {prop.name!r} to {target}?", default=False):
             raise typer.Exit(0)
 

@@ -181,7 +181,11 @@ fieldset {
 legend { padding: 0 6px; font-weight: 600; color: var(--muted); }
 
 /* Rental details only appear while the rental switch is on. */
+.rental-fields, .units { display: grid; gap: 12px; }
 .form:has(#is_rental:not(:checked)) .rental-fields { display: none; }
+.form .unit-count input { max-width: 120px; }
+.unit[hidden] { display: none; }
+.unit-total { margin: 0; font-weight: 600; }
 
 .form label.switch {
   display: flex;

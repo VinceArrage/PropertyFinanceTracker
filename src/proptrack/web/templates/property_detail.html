@@ -16,16 +16,33 @@
 <dl class="details">
   <dt>Address</dt><dd>{{ prop.address or "—" }}</dd>
   {% if prop.is_rental %}
+    <dt>Units</dt><dd>{{ prop.units|length }}</dd>
     <dt>Monthly rent</dt>
-    <dd>{{ prop.monthly_rent_cents|money if prop.monthly_rent_cents is not none else "—" }}</dd>
-    <dt>Tenant</dt><dd>{{ prop.tenant_name or "—" }}</dd>
-    <dt>Lease</dt>
-    <dd>{% if prop.lease_start or prop.lease_end %}{{ prop.lease_start or "?" }} to {{ prop.lease_end or "?" }}{% else %}—{% endif %}</dd>
+    <dd>{{ prop.total_rent_cents|money if prop.total_rent_cents is not none else "—" }}{% if prop.units|length > 1 and prop.total_rent_cents is not none %} <span class="muted">total</span>{% endif %}</dd>
   {% endif %}
   {% if prop.notes %}<dt>Notes</dt><dd class="notes">{{ prop.notes }}</dd>{% endif %}
   <dt>Records</dt>
   <dd>{{ counts.transactions }} expenses · {{ counts.receipts }} receipts{% if prop.is_rental %} · {{ counts.rent_payments }} rent payments{% endif %}</dd>
 </dl>
+
+{% if prop.is_rental %}
+<h2>Units</h2>
+<div class="table-wrap">
+<table class="table">
+  <thead><tr><th>Apt / unit</th><th>Tenant</th><th>Lease</th><th class="num">Rent</th></tr></thead>
+  <tbody>
+    {% for u in prop.units %}
+    <tr>
+      <td>{{ u.label }}</td>
+      <td>{{ u.tenant_name or "—" }}</td>
+      <td>{% if u.lease_start or u.lease_end %}{{ u.lease_start or "?" }} to {{ u.lease_end or "?" }}{% else %}—{% endif %}</td>
+      <td class="num">{{ u.monthly_rent_cents|money if u.monthly_rent_cents is not none else "—" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
 
 <h2>Recent expenses</h2>
 {% if expenses %}
