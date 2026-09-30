@@ -1,5 +1,7 @@
 # Property Finance Tracker (`proptrack`)
 
+> **🚧 Still in progress.** This is a personal project under active development, so features and structure may still change.
+
 Tracks expenses, receipts and rent for rental properties and a personal home.
 Everything runs locally on this PC; nothing is sent to any online service.
 
