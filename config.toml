@@ -1,0 +1,10 @@
+# Local settings for proptrack.
+# Environment variables override these: PROPTRACK_DATA_DIR, PROPTRACK_CONFIG.
+
+[paths]
+# The database and receipt photos live outside OneDrive so sync can't corrupt
+# a database that is being written. Backups are copied into OneDrive instead.
+data_dir = "C:/Users/vince/PropertyFinanceData"
+
+[ocr]
+tesseract_cmd = "C:/Program Files/Tesseract-OCR/tesseract.exe"
