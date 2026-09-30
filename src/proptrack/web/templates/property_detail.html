@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}{{ prop.name }} · Property Tracker{% endblock %}
+{% block content %}
+<p><a class="back" href="/properties">&larr; All properties</a></p>
+<div class="page-head">
+  <h1>{{ prop.name }} <span class="badge {{ prop.kind }}">{{ prop.kind|capitalize }}</span></h1>
+  <div class="actions">
+    <a class="button" href="/properties/{{ prop.id }}/edit">Edit</a>
+    <a class="button danger" href="/properties/{{ prop.id }}/delete">Delete</a>
+  </div>
+</div>
+
+{% if notice %}<p class="alert success" role="status">{{ notice }}</p>{% endif %}
+
+<dl class="details">
+  <dt>Address</dt><dd>{{ prop.address or "—" }}</dd>
+  {% if prop.is_rental %}
+    <dt>Monthly rent</dt>
+    <dd>{{ prop.monthly_rent_cents|money if prop.monthly_rent_cents is not none else "—" }}</dd>
+    <dt>Tenant</dt><dd>{{ prop.tenant_name or "—" }}</dd>
+    <dt>Lease</dt>
+    <dd>{% if prop.lease_start or prop.lease_end %}{{ prop.lease_start or "?" }} to {{ prop.lease_end or "?" }}{% else %}—{% endif %}</dd>
+  {% endif %}
+  {% if prop.notes %}<dt>Notes</dt><dd class="notes">{{ prop.notes }}</dd>{% endif %}
+  <dt>Records</dt>
+  <dd>{{ counts.transactions }} expenses · {{ counts.receipts }} receipts{% if prop.is_rental %} · {{ counts.rent_payments }} rent payments{% endif %}</dd>
+</dl>
+
+<h2>Expense categories</h2>
+<p class="muted">{% if prop.is_rental %}Rental categories follow IRS Schedule E.{% else %}Categories for a personal home.{% endif %}</p>
+<ul class="chips">
+  {% for c in categories %}<li>{{ c.name }}</li>{% endfor %}
+</ul>
+{% endblock %}

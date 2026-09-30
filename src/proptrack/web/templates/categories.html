@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Categories · Property Tracker{% endblock %}
+{% block content %}
+<h1>Expense categories</h1>
+
+<h2>Rental properties</h2>
+<p class="muted">Matched to the lines on IRS Schedule E. Capital improvements are depreciated over several years instead of deducted at once.</p>
+<table class="table">
+  <thead><tr><th>Category</th><th>Schedule E line</th></tr></thead>
+  <tbody>
+    {% for c in rental %}
+    <tr><td>{{ c.name }}</td><td>{{ c.schedule_e_line if c.schedule_e_line else "Depreciated" }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h2>Personal home</h2>
+<ul class="chips">
+  {% for c in personal %}<li>{{ c.name }}</li>{% endfor %}
+</ul>
+{% endblock %}

@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}{{ heading }} · Property Tracker{% endblock %}
+{% block content %}
+<h1>{{ heading }}</h1>
+
+{% if error %}<p class="alert error" role="alert">{{ error }}</p>{% endif %}
+{% if warnings %}
+  <div class="alert warning" role="alert">
+    <strong>Please confirm</strong>
+    <ul>{% for w in warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+  </div>
+{% endif %}
+
+<form method="post" class="form">
+  <label>Name
+    <input name="name" required maxlength="100" value="{{ values.name }}" placeholder="e.g. Elm St duplex">
+  </label>
+  <label>Address
+    <input name="address" value="{{ values.address }}" autocomplete="street-address">
+  </label>
+
+  <label class="switch">
+    <input type="checkbox" name="is_rental" id="is_rental" {% if values.is_rental %}checked{% endif %}>
+    <span class="track" aria-hidden="true"></span>
+    <span>This is a rental property</span>
+  </label>
+
+  <fieldset class="rental-fields">
+    <legend>Rental details</legend>
+    <label>Monthly rent
+      <input name="monthly_rent" inputmode="decimal" value="{{ values.monthly_rent }}" placeholder="1800">
+    </label>
+    <label>Tenant name
+      <input name="tenant_name" value="{{ values.tenant_name }}">
+    </label>
+    <div class="row">
+      <label>Lease start <input type="date" name="lease_start" value="{{ values.lease_start }}"></label>
+      <label>Lease end <input type="date" name="lease_end" value="{{ values.lease_end }}"></label>
+    </div>
+  </fieldset>
+
+  <label>Notes
+    <textarea name="notes" rows="3">{{ values.notes }}</textarea>
+  </label>
+
+  {% if warnings %}<input type="hidden" name="confirm_switch" value="1">{% endif %}
+  <div class="actions">
+    <button class="button primary" type="submit">{{ "Confirm and save" if warnings else submit_label }}</button>
+    <a class="button" href="{{ cancel_url }}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

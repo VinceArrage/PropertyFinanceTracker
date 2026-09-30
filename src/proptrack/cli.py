@@ -1,6 +1,8 @@
 """Command-line interface: `proptrack --help`."""
 
+import dataclasses
 import sqlite3
+from pathlib import Path
 from typing import Annotated, Optional
 
 import typer
@@ -78,6 +80,33 @@ def init() -> None:
         console.print(f"Tesseract: {config.tesseract_cmd}")
     else:
         console.print(f"[yellow]Tesseract not found at {config.tesseract_cmd}[/yellow] (update config.toml)")
+
+
+@app.command()
+def serve(
+    host: Annotated[str, typer.Option(help="Use 0.0.0.0 to allow phones on your Wi-Fi.")] = "127.0.0.1",
+    port: Annotated[int, typer.Option(help="Port number.")] = 8000,
+    open_browser: Annotated[bool, typer.Option("--open", help="Open the app in your browser.")] = False,
+    data_dir: Annotated[Optional[Path], typer.Option(help="Use a different data folder (for trying things out).")] = None,
+) -> None:
+    """Start the web app."""
+    import threading
+    import webbrowser
+
+    import uvicorn
+
+    from proptrack.web.app import create_app
+
+    config = load_config()
+    if data_dir is not None:
+        config = dataclasses.replace(config, data_dir=data_dir)
+    url = f"http://localhost:{port}"
+    console.print(f"Property Tracker is running at {url}")
+    console.print(f"Data: {config.data_dir}")
+    console.print("Keep this window open while you use the app. Press Ctrl+C to stop.")
+    if open_browser:
+        threading.Timer(1.5, webbrowser.open, args=(url,)).start()
+    uvicorn.run(create_app(config), host=host, port=port, log_level="warning")
 
 
 @property_app.command("add")

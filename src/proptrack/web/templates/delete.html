@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Delete {{ prop.name }} · Property Tracker{% endblock %}
+{% block content %}
+<h1>Delete {{ prop.name }}?</h1>
+
+{% if error %}<p class="alert error" role="alert">{{ error }}</p>{% endif %}
+
+{% if counts.transactions or counts.receipts or counts.rent_payments %}
+  <p class="alert warning">
+    This property has {{ counts.transactions }} expenses, {{ counts.receipts }} receipts and
+    {{ counts.rent_payments }} rent payments, so it can't be deleted.
+    Deleting is only for properties added by mistake.
+  </p>
+  <a class="button" href="/properties/{{ prop.id }}">Back</a>
+{% else %}
+  <p>This can't be undone. The property has no expenses, receipts or rent recorded.</p>
+  <form method="post" class="actions">
+    <button class="button danger" type="submit">Delete property</button>
+    <a class="button" href="/properties/{{ prop.id }}">Cancel</a>
+  </form>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "proptrack-demo",
+      "runtimeExecutable": "C:\\Users\\vince\\OneDrive\\Documents\\Projects\\PropertyFinanceTracker\\.venv\\Scripts\\proptrack.exe",
+      "runtimeArgs": ["serve", "--port", "8765", "--data-dir", "C:\\Users\\vince\\AppData\\Local\\Temp\\proptrack-demo"],
+      "port": 8765
+    }
+  ]
+}
