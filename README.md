@@ -9,6 +9,15 @@ Everything runs locally on this PC; nothing is sent to any online service.
 Double-click **`start.bat`**. It starts the app and opens http://localhost:8000 in your
 browser. Keep the black window open while you use the app; close it to stop.
 
+The first time, it asks you to choose a PIN (only possible on this PC). Every device
+then enters the PIN once and stays signed in for 30 days. Forgot it? Run
+`.\.venv\Scripts\proptrack.exe set-pin`.
+
+**On your iPhone:** open **Settings** in the app and scan the QR code (same Wi-Fi), then
+Share → Add to Home Screen. This needs your Wi-Fi set to *Private* in Windows and
+Python allowed through Windows Firewall on private networks. To keep the app to this PC
+only, set `host = "127.0.0.1"` in `config.toml`.
+
 What you can do there:
 - **Properties:** add, edit, delete, and switch between rental and personal.
 - **Receipts:** take or choose a photo, let the app read store/date/total/items,

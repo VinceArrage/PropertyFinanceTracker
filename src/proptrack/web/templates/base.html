@@ -8,15 +8,20 @@
   <meta name="theme-color" content="#1f6f5c">
   <title>{% block title %}Property Tracker{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css">
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+  <link rel="icon" type="image/png" href="/static/apple-touch-icon.png">
 </head>
 <body>
   <header class="topbar">
     <a class="brand" href="/properties">Property Tracker</a>
+    {% block nav %}
     <nav>
       <a href="/properties" {% if active == "properties" %}aria-current="page"{% endif %}>Properties</a>
       <a href="/receipts" {% if active == "receipts" %}aria-current="page"{% endif %}>Receipts</a>
       <a href="/categories" {% if active == "categories" %}aria-current="page"{% endif %}>Categories</a>
+      <a href="/settings" {% if active == "settings" %}aria-current="page"{% endif %}>Settings</a>
     </nav>
+    {% endblock %}
   </header>
   <main>
     {% block content %}{% endblock %}

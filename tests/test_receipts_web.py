@@ -4,11 +4,9 @@ import re
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
-
 from proptrack.config import DEFAULT_TESSERACT, Config
-from proptrack.web.app import create_app
 from tests.fake_receipts import make_receipt_photo
+from tests.helpers import app_client
 
 needs_tesseract = pytest.mark.skipif(not DEFAULT_TESSERACT.exists(), reason="Tesseract not installed")
 
@@ -20,7 +18,7 @@ def config(tmp_path):
 
 @pytest.fixture
 def client(config):
-    with TestClient(create_app(config)) as test_client:
+    with app_client(config) as test_client:
         test_client.post("/properties/new", data={"name": "Duplex", "is_rental": "on"})
         test_client.post("/properties/new", data={"name": "Home"})
         yield test_client
@@ -87,7 +85,7 @@ def test_scan_review_and_save(client, config):
 
 def test_png_upload_without_tesseract_still_saves_photo(tmp_path):
     config = Config(data_dir=tmp_path / "data", tesseract_cmd=tmp_path / "missing.exe")
-    with TestClient(create_app(config)) as client:
+    with app_client(config) as client:
         client.post("/properties/new", data={"name": "Home"})
         review = upload(client, make_receipt_photo(fmt="PNG"), filename="r.png")
         assert review.status_code == 200
@@ -109,7 +107,7 @@ def test_requires_property(client):
 
 def test_save_rejects_mismatched_category(tmp_path):
     config = Config(data_dir=tmp_path / "data", tesseract_cmd=tmp_path / "missing.exe")
-    with TestClient(create_app(config)) as client:
+    with app_client(config) as client:
         client.post("/properties/new", data={"name": "Home"})
         review = upload(client, make_receipt_photo())
         repairs = category_option_id(review.text, "Repairs", "Rental categories")
@@ -122,7 +120,7 @@ def test_save_rejects_mismatched_category(tmp_path):
 
 def test_save_rejects_bad_item(tmp_path):
     config = Config(data_dir=tmp_path / "data", tesseract_cmd=tmp_path / "missing.exe")
-    with TestClient(create_app(config)) as client:
+    with app_client(config) as client:
         client.post("/properties/new", data={"name": "Home"})
         upload(client, make_receipt_photo())
         response = client.post(

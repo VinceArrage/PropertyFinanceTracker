@@ -2,6 +2,7 @@
 
 from itertools import zip_longest
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import FileResponse, RedirectResponse
@@ -9,11 +10,24 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
+from starlette.middleware.sessions import SessionMiddleware
 
+from proptrack.auth import (
+    PIN_MAX_LENGTH,
+    PIN_MIN_LENGTH,
+    LoginThrottle,
+    PinError,
+    check_pin,
+    pin_is_set,
+    pin_version,
+    session_secret,
+    set_pin,
+)
 from proptrack.categories import list_categories
 from proptrack.config import Config, load_config
 from proptrack.db import SCHEMA_VERSION, connect, init_db
 from proptrack.money import format_cents, parse_money
+from proptrack.network import phone_urls, qr_svg
 from proptrack.properties import (
     MAX_UNITS,
     Property,
@@ -49,6 +63,9 @@ from proptrack.transactions import (
 WEB_DIR = Path(__file__).parent
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 BLANK_ITEM_ROWS = 2
+SESSION_DAYS = 30  # how long a phone or browser stays signed in
+PUBLIC_PATHS = ("/login", "/setup")
+LOCAL_CLIENTS = ("127.0.0.1", "::1", "localhost")
 SAVED_MESSAGES = {"added": "Property added.", "updated": "Changes saved."}
 # Form field name -> key in a unit's form values. Each unit block posts one of each.
 UNIT_FORM_FIELDS = {
@@ -246,10 +263,25 @@ def _line_items_from_values(values: dict) -> list[NewLineItem]:
     return items
 
 
+def _safe_next(target: str) -> str:
+    """Only allow redirects to pages of this app (no other sites)."""
+    if target.startswith("/") and not target.startswith("//") and "\\" not in target:
+        return target
+    return "/"
+
+
+def _wait_text(seconds: int) -> str:
+    if seconds < 60:
+        return f"{seconds} seconds"
+    minutes = (seconds + 59) // 60
+    return f"{minutes} minute{'s' if minutes != 1 else ''}"
+
+
 def create_app(config: Config | None = None) -> FastAPI:
     config = config or load_config()
     setup_conn = connect(config.db_path)
     init_db(setup_conn)
+    secret = session_secret(setup_conn)
     setup_conn.close()
 
     app = FastAPI(title="Property Tracker", docs_url=None, redoc_url=None, openapi_url=None)
@@ -295,6 +327,136 @@ def create_app(config: Config | None = None) -> FastAPI:
             message="Something went wrong and nothing was saved. The details are in the black Property "
             "Tracker window; copy them to Claude to get it fixed.",
         )
+
+    # ---- PIN protection ----------------------------------------------------------
+
+    throttle = LoginThrottle()
+
+    def is_local(request: Request) -> bool:
+        return request.client is not None and request.client.host in LOCAL_CLIENTS
+
+    def client_key(request: Request) -> str:
+        return request.client.host if request.client else "unknown"
+
+    @app.middleware("http")
+    async def require_pin(request: Request, call_next):
+        """Every page except sign-in needs a signed-in session for the current PIN."""
+        path = request.url.path
+        if path.startswith("/static/") or path in PUBLIC_PATHS:
+            return await call_next(request)
+        conn = connect(config.db_path)
+        try:
+            has_pin, current_version = pin_is_set(conn), pin_version(conn)
+        finally:
+            conn.close()
+        if not has_pin:
+            return RedirectResponse("/setup", status_code=303)
+        if request.session.get("pin_version") != current_version:
+            target = path + (f"?{request.url.query}" if request.url.query else "")
+            return RedirectResponse(f"/login?next={quote(target)}", status_code=303)
+        return await call_next(request)
+
+    # Added after require_pin so it wraps it and the session is available there.
+    # SameSite=Lax keeps other websites from submitting forms with this cookie.
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=secret,
+        session_cookie="proptrack_session",
+        max_age=SESSION_DAYS * 24 * 3600,
+        same_site="lax",
+        https_only=False,  # plain HTTP on the home network
+    )
+
+    def sign_in(request: Request, conn) -> None:
+        request.session.clear()
+        request.session["pin_version"] = pin_version(conn)
+
+    @app.get("/setup")
+    async def setup_page(request: Request, conn=Depends(get_conn)):
+        if pin_is_set(conn):
+            return RedirectResponse("/login", status_code=303)
+        return render(request, "setup.html", local=is_local(request), error=None,
+                      min_length=PIN_MIN_LENGTH, max_length=PIN_MAX_LENGTH)
+
+    @app.post("/setup")
+    async def create_pin(request: Request, conn=Depends(get_conn)):
+        if pin_is_set(conn):
+            return RedirectResponse("/login", status_code=303)
+        context = dict(local=is_local(request), min_length=PIN_MIN_LENGTH, max_length=PIN_MAX_LENGTH)
+        # The first PIN can only be chosen at the PC, so nobody else on the Wi-Fi can claim the app.
+        if not is_local(request):
+            return render(request, "setup.html", status_code=403, error=None, **context)
+        form = await request.form()
+        pin, confirm = str(form.get("pin") or ""), str(form.get("confirm") or "")
+        try:
+            if pin != confirm:
+                raise PinError("The two PINs don't match.")
+            set_pin(conn, pin)
+        except PinError as exc:
+            return render(request, "setup.html", status_code=400, error=str(exc), **context)
+        sign_in(request, conn)
+        return RedirectResponse("/settings?welcome=true", status_code=303)
+
+    @app.get("/login")
+    async def login_page(request: Request, next: str = "/", conn=Depends(get_conn)):
+        if not pin_is_set(conn):
+            return RedirectResponse("/setup", status_code=303)
+        return render(request, "login.html", next=_safe_next(next), error=None)
+
+    @app.post("/login")
+    async def login(request: Request, conn=Depends(get_conn)):
+        form = await request.form()
+        pin, target = str(form.get("pin") or ""), _safe_next(str(form.get("next") or "/"))
+        key = client_key(request)
+
+        def fail(message: str, status: int):
+            return render(request, "login.html", status_code=status, next=target, error=message)
+
+        if wait := throttle.seconds_locked(key):
+            return fail(f"Too many wrong PINs. Try again in {_wait_text(wait)}.", 429)
+        if not check_pin(conn, pin):
+            throttle.failed(key)
+            wait = throttle.seconds_locked(key)
+            return fail(f"Wrong PIN. Try again in {_wait_text(wait)}." if wait else "Wrong PIN.", 401)
+        throttle.succeeded(key)
+        sign_in(request, conn)
+        return RedirectResponse(target, status_code=303)
+
+    @app.post("/logout")
+    async def logout(request: Request):
+        request.session.clear()
+        return RedirectResponse("/login", status_code=303)
+
+    def settings_view(request, *, welcome=False, saved=False, error=None, status=200):
+        urls = phone_urls(config.port) if config.phone_access else []
+        return render(
+            request, "settings.html", status_code=status, active="settings",
+            phone_access=config.phone_access, urls=urls, qr=qr_svg(urls[0]) if urls else None,
+            welcome=welcome, saved=saved, error=error, min_length=PIN_MIN_LENGTH, max_length=PIN_MAX_LENGTH,
+        )
+
+    @app.get("/settings")
+    async def settings_page(request: Request, welcome: bool = False, saved: bool = False):
+        return settings_view(request, welcome=welcome, saved=saved)
+
+    @app.post("/settings/pin")
+    async def change_pin(request: Request, conn=Depends(get_conn)):
+        form = await request.form()
+        current, new, confirm = (str(form.get(k) or "") for k in ("current", "pin", "confirm"))
+        key = client_key(request)
+        if wait := throttle.seconds_locked(key):
+            return settings_view(request, error=f"Too many wrong PINs. Try again in {_wait_text(wait)}.", status=429)
+        if not check_pin(conn, current):
+            throttle.failed(key)
+            return settings_view(request, error="Your current PIN is wrong.", status=400)
+        try:
+            if new != confirm:
+                raise PinError("The two new PINs don't match.")
+            set_pin(conn, new)
+        except PinError as exc:
+            return settings_view(request, error=str(exc), status=400)
+        sign_in(request, conn)  # this device stays signed in; all others must sign in again
+        return RedirectResponse("/settings?saved=true", status_code=303)
 
     @app.get("/")
     async def home():

@@ -112,8 +112,10 @@ def init() -> None:
 
 @app.command()
 def serve(
-    host: Annotated[str, typer.Option(help="Use 0.0.0.0 to allow phones on your Wi-Fi.")] = "127.0.0.1",
-    port: Annotated[int, typer.Option(help="Port number.")] = 8000,
+    host: Annotated[
+        Optional[str], typer.Option(help="0.0.0.0 = also phones on your Wi-Fi, 127.0.0.1 = this PC only. Default: config.toml.")
+    ] = None,
+    port: Annotated[Optional[int], typer.Option(help="Port number. Default: config.toml.")] = None,
     open_browser: Annotated[bool, typer.Option("--open", help="Open the app in your browser.")] = False,
     data_dir: Annotated[Optional[Path], typer.Option(help="Use a different data folder (for trying things out).")] = None,
 ) -> None:
@@ -123,18 +125,40 @@ def serve(
 
     import uvicorn
 
+    from proptrack.network import phone_urls
     from proptrack.web.app import create_app
 
     config = load_config()
-    if data_dir is not None:
-        config = dataclasses.replace(config, data_dir=data_dir)
-    url = f"http://localhost:{port}"
+    overrides = {"data_dir": data_dir, "host": host, "port": port}
+    config = dataclasses.replace(config, **{key: value for key, value in overrides.items() if value is not None})
+    url = f"http://localhost:{config.port}"
     console.print(f"Property Tracker is running at {url}")
+    if config.phone_access:
+        for phone_url in phone_urls(config.port)[:1]:
+            console.print(f"On your phone (same Wi-Fi): {phone_url}")
+    else:
+        console.print("Phone access is off (this PC only).")
     console.print(f"Data: {config.data_dir}")
     console.print("Keep this window open while you use the app. Press Ctrl+C to stop.")
     if open_browser:
         threading.Timer(1.5, webbrowser.open, args=(url,)).start()
-    uvicorn.run(create_app(config), host=host, port=port, log_level="warning")
+    uvicorn.run(create_app(config), host=config.host, port=config.port, log_level="warning")
+
+
+@app.command("set-pin")
+def set_pin_command() -> None:
+    """Set or reset the PIN (e.g. if you forgot it). Signs out every device."""
+    from proptrack.auth import PinError, set_pin
+
+    pin = typer.prompt("New PIN (4-12 digits)", hide_input=True)
+    confirm = typer.prompt("Type it again", hide_input=True)
+    if pin != confirm:
+        _fail("The two PINs don't match.")
+    try:
+        set_pin(_open_db(), pin)
+    except PinError as exc:
+        _fail(str(exc))
+    console.print("PIN saved. Every device will need to sign in again.")
 
 
 @property_app.command("add")

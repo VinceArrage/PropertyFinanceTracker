@@ -380,3 +380,23 @@ legend { padding: 0 6px; font-weight: 600; color: var(--muted); }
   white-space: pre-wrap;
 }
 .delete-receipt { margin-top: 24px; }
+
+/* Sign-in and settings */
+.narrow { max-width: 380px; margin: 24px auto 0; }
+.narrow-form { max-width: 380px; }
+.small { font-size: 0.85rem; }
+.form input.pin-input { font-size: 1.4rem; letter-spacing: 0.3em; }
+code { font-size: 0.85em; padding: 1px 4px; border-radius: 4px; background: var(--surface); border: 1px solid var(--border); }
+.phone-setup {
+  display: grid;
+  gap: 16px;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+@media (min-width: 560px) { .phone-setup { grid-template-columns: 180px 1fr; align-items: start; } }
+.phone-setup ol { margin: 0; padding-left: 20px; display: grid; gap: 8px; }
+.qr { width: 180px; padding: 8px; background: #fff; border-radius: 8px; justify-self: center; }
+.qr svg { display: block; width: 100%; height: auto; }
+.phone-url { margin-top: 4px; font-size: 1.1rem; word-break: break-all; }

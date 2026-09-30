@@ -3,7 +3,7 @@
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # Version 1: the original schema below. Later versions are applied in order from
 # MIGRATIONS so existing databases are upgraded in place.
@@ -105,6 +105,8 @@ MIGRATIONS = {
         ALTER TABLE properties DROP COLUMN lease_end;
         ALTER TABLE rent_payments ADD COLUMN unit_id INTEGER REFERENCES units(id);
     """,
+    # App settings such as the hashed PIN and the key that signs login cookies.
+    4: "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
 }
 
 # (name, Schedule E line). Capital improvements are depreciated over years

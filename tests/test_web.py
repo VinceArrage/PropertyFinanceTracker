@@ -1,16 +1,15 @@
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
 from proptrack.config import Config
 from proptrack.web.app import create_app
+from tests.helpers import app_client
 
 
 @pytest.fixture
 def client(tmp_path):
-    app = create_app(Config(data_dir=tmp_path / "data", tesseract_cmd=Path("missing.exe")))
-    with TestClient(app) as test_client:
+    with app_client(Config(data_dir=tmp_path / "data", tesseract_cmd=Path("missing.exe"))) as test_client:
         yield test_client
 
 
@@ -189,13 +188,14 @@ def test_database_newer_than_app_asks_for_restart(client, tmp_path):
 
 
 def test_unexpected_error_shows_friendly_page(tmp_path):
-    app = create_app(Config(data_dir=tmp_path / "data", tesseract_cmd=Path("missing.exe")))
+    config = Config(data_dir=tmp_path / "data", tesseract_cmd=Path("missing.exe"))
+    app = create_app(config)
 
     @app.get("/boom")
     async def boom():
         raise RuntimeError("kaboom")
 
-    with TestClient(app, raise_server_exceptions=False) as client:
+    with app_client(config, app=app, raise_server_exceptions=False) as client:
         response = client.get("/boom")
     assert response.status_code == 500
     assert "Something went wrong and nothing was saved" in response.text

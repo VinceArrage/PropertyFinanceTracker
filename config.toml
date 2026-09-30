@@ -8,3 +8,9 @@ data_dir = "C:/Users/vince/PropertyFinanceData"
 
 [ocr]
 tesseract_cmd = "C:/Program Files/Tesseract-OCR/tesseract.exe"
+
+[server]
+# "0.0.0.0" lets your phone reach the app over home Wi-Fi (a PIN protects it).
+# Use "127.0.0.1" to allow this PC only.
+host = "0.0.0.0"
+port = 8000

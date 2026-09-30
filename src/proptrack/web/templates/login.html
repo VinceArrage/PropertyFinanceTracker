@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Sign in · Property Tracker{% endblock %}
+{% block nav %}{% endblock %}
+{% block content %}
+<div class="narrow">
+  <h1>Enter your PIN</h1>
+  {% if error %}<p class="alert error" role="alert">{{ error }}</p>{% endif %}
+  <form method="post" action="/login" class="form">
+    <input type="hidden" name="next" value="{{ next }}">
+    <label>PIN
+      <input type="password" name="pin" inputmode="numeric" pattern="[0-9]*" autocomplete="current-password"
+             required autofocus class="pin-input">
+    </label>
+    <button class="button primary" type="submit">Sign in</button>
+  </form>
+  <p class="muted small">This device stays signed in for 30 days. Forgot your PIN? At the PC, run
+    <code>.venv\Scripts\proptrack.exe set-pin</code> in the project folder.</p>
+</div>
+{% endblock %}

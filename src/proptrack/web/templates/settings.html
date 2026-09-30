@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Settings · Property Tracker{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+
+{% if welcome %}<p class="alert success" role="status">PIN saved. Now set up your phone below.</p>{% endif %}
+{% if saved %}<p class="alert success" role="status">PIN changed. Other devices will need to sign in again.</p>{% endif %}
+
+<h2>Use it on your phone</h2>
+{% if not phone_access %}
+  <p class="alert warning">Phone access is off: the app only accepts connections from this PC.
+    To turn it on, set <code>host = "0.0.0.0"</code> under <code>[server]</code> in <code>config.toml</code>
+    and restart <code>start.bat</code>.</p>
+{% elif not urls %}
+  <p class="alert warning">This PC doesn't seem to be connected to a network, so there's no address for your phone.</p>
+{% else %}
+  <div class="phone-setup">
+    <div class="qr" aria-hidden="true">{{ qr | safe }}</div>
+    <ol>
+      <li>Connect your iPhone to the <strong>same Wi-Fi</strong> as this PC.</li>
+      <li>Point the iPhone camera at the code, or type this into Safari:
+        <div class="phone-url"><strong>{{ urls[0] }}</strong></div>
+        {% if urls|length > 1 %}<span class="muted small">If that doesn't open, try: {{ urls[1:]|join(", ") }}</span>{% endif %}
+      </li>
+      <li>Enter your PIN.</li>
+      <li>In Safari tap <strong>Share</strong> → <strong>Add to Home Screen</strong> to get an app icon.</li>
+    </ol>
+  </div>
+  <p class="muted small">If the page doesn't load on the phone, Windows Firewall is probably blocking it.
+    The first time the app starts, Windows asks whether to allow Python on networks: choose
+    <strong>Private networks</strong> and click <strong>Allow</strong>. Your PC must be on
+    <strong>Private</strong> network mode for your home Wi-Fi. The app keeps running only while the black
+    window is open and the PC is awake.</p>
+{% endif %}
+
+<h2>Change PIN</h2>
+{% if error %}<p class="alert error" role="alert">{{ error }}</p>{% endif %}
+<form method="post" action="/settings/pin" class="form narrow-form">
+  <label>Current PIN
+    <input type="password" name="current" inputmode="numeric" pattern="[0-9]*" autocomplete="current-password"
+           required class="pin-input">
+  </label>
+  <label>New PIN ({{ min_length }}–{{ max_length }} digits)
+    <input type="password" name="pin" inputmode="numeric" pattern="[0-9]*" autocomplete="new-password"
+           minlength="{{ min_length }}" maxlength="{{ max_length }}" required class="pin-input">
+  </label>
+  <label>Type the new PIN again
+    <input type="password" name="confirm" inputmode="numeric" pattern="[0-9]*" autocomplete="new-password"
+           minlength="{{ min_length }}" maxlength="{{ max_length }}" required class="pin-input">
+  </label>
+  <button class="button primary" type="submit">Change PIN</button>
+</form>
+
+<h2>Sign out</h2>
+<form method="post" action="/logout">
+  <button class="button" type="submit">Sign out of this device</button>
+</form>
+{% endblock %}
